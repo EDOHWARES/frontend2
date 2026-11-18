@@ -238,6 +238,82 @@ Tests use Vitest + React Testing Library. Focus on user behavior, not implementa
 
 For hooks that schedule timers, use Vitest's fake-timer API instead of real delays.
 See [docs/testing-fake-timers.md](./docs/testing-fake-timers.md) for a worked example with `useDebouncedValue`, including timer cleanup.
+### Test setup and automatic cleanup
+
+`src/test/setup.ts` runs before every test file (configured in `vite.config.ts` via `setupFiles`). It does two things automatically so individual tests do not have to.
+
+**React Testing Library cleanup**
+
+After each test, `cleanup()` from `@testing-library/react` unmounts every component tree that was rendered during that test and removes its DOM nodes. This is registered with Vitest's `afterEach`:
+
+```ts
+afterEach(() => {
+  cleanup();
+});
+```
+
+Without this, rendered components would accumulate across tests in the same file, causing false query matches, event-listener leaks, and unpredictable failures.
+
+**jsdom environment shims**
+
+jsdom does not implement every browser API. The setup file patches two gaps that several hooks depend on:
+
+| Shim | Why it is needed |
+|------|-----------------|
+| `window.matchMedia` | `useTheme()` calls `window.matchMedia('(prefers-color-scheme: dark)')` unconditionally on mount. jsdom leaves this undefined, throwing a `TypeError`. The shim returns a minimal object (`matches: false`, no-op `addEventListener`/`removeEventListener`). |
+| `globalThis.localStorage` | `useTheme()` and `useWalletConnection()` read and write `localStorage` on mount. Some jsdom configurations leave it undefined. The shim provides a `Map`-backed in-memory `Storage` object. |
+
+The shims apply globally for the entire test run, so you do not need to mock either API in individual test files.
+
+**Restoring test-specific mocks**
+
+When a test overrides a global or module export with `vi.spyOn` or `vi.fn()`, restore it after the test so it does not affect others. The simplest approach is `vi.restoreAllMocks()` in an `afterEach`:
+
+```ts
+import { afterEach, vi } from "vitest";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+```
+
+Alternatively, pass `restoreMocks: true` in the Vitest config to restore every spy automatically. If you only need to reset call counts and return values without removing the spy, use `vi.clearAllMocks()` instead.
+
+**Example: overriding `localStorage` for one test**
+
+The global shim covers the happy path. When you need to test error handling or a specific stored value, replace the shim locally and restore it afterwards:
+
+```ts
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { ThemeToggle } from "./ThemeToggle";
+
+describe("ThemeToggle", () => {
+  let getItemSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    getItemSpy = vi.spyOn(globalThis.localStorage, "getItem");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks(); // removes the spy, restores the shim's original getItem
+  });
+
+  it("defaults to light theme when nothing is stored", () => {
+    getItemSpy.mockReturnValue(null);
+    render(<ThemeToggle />);
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("restores dark theme from storage", () => {
+    getItemSpy.mockReturnValue("dark");
+    render(<ThemeToggle />);
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+  });
+});
+```
+
+The `cleanup()` registered in the setup file unmounts the rendered tree after each test, and `vi.restoreAllMocks()` removes the `getItem` spy, so neither the DOM state nor the mock leaks into the next test.
 
 ## Code Standards
 
@@ -304,6 +380,61 @@ Uses Stellar Freighter for wallet connection.
 
 Example public key used in tests and docs: `GABCD...` (placeholder only — never commit
 real keys or secrets).
+
+For testing wallet-dependent components without triggering a real signature request, see
+[Testing wallet interactions](#testing-wallet-interactions) below.
+
+## Testing wallet interactions
+
+Components that call Freighter should never reach the extension during unit tests.
+Mock the hook that wraps the wallet call instead of the extension itself.
+
+`BuyModal` delegates all payment logic to `useBuyResource`. The test suite in
+`src/components/BuyModal.test.tsx` mocks that hook at the module boundary:
+
+```ts
+// At the top of the test file
+vi.mock("../hooks/useBuyResource.js", () => ({
+  useBuyResource: vi.fn(),
+}));
+```
+
+Then each test drives the component into the desired state by configuring the mock's
+return value with `vi.mocked`:
+
+```ts
+// Wallet connected — idle state, pay button enabled
+vi.mocked(useBuyResource).mockReturnValue({
+  status: "idle",
+  result: null,
+  error: null,
+  buy: mockBuy,
+  reset: mockReset,
+});
+render(<BuyModal
+  resourceTitle="Premium Dataset"
+  price="1.50"
+  recipient="GBUYER1XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+  accessUrl="https://api.example.com/resources/abc"
+  walletAddress="GWALLET1XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+  onClose={vi.fn()}
+  onCopyUrl={vi.fn()}
+/>);
+// pay button is now enabled
+expect(screen.getByRole("button", { name: /pay 1\.50 usdc/i })).toBeEnabled();
+```
+
+**Key patterns**
+
+| Scenario | `status` to set | What to assert |
+|---|---|---|
+| No wallet connected | `"idle"` + `walletAddress={null}` | Pay button disabled, "connect your Freighter wallet" notice visible |
+| Payment in flight | `"paying"` | Spinner has `aria-busy="true"`, Close button disabled |
+| Payment succeeded | `"success"` + `result.explorerUrl` | Explorer link rendered with correct `href` |
+| Payment failed | `"error"` + `error` message | Error text visible, "Try again" button calls `buy` |
+
+Because the mock controls all state transitions, tests run offline and never prompt
+the Freighter browser extension for a signature.
 
 ## Payment Integration
 
