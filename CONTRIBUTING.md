@@ -236,6 +236,8 @@ npm run test:ui       # Visual UI for test runner
 
 Tests use Vitest + React Testing Library. Focus on user behavior, not implementation details.
 
+For hooks that schedule timers, use Vitest's fake-timer API instead of real delays.
+See [docs/testing-fake-timers.md](./docs/testing-fake-timers.md) for a worked example with `useDebouncedValue`, including timer cleanup.
 ### Test setup and automatic cleanup
 
 `src/test/setup.ts` runs before every test file (configured in `vite.config.ts` via `setupFiles`). It does two things automatically so individual tests do not have to.
