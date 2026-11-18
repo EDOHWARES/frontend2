@@ -240,10 +240,11 @@ Vitest packages are bumped by Dependabot in separate PRs — see
 [Dependabot Updates](#dependabot-updates) for keeping them in step.
 
 ### Vitest UI Peer Dependency
+For hooks that schedule timers, use Vitest's fake-timer API instead of real delays.
+See [docs/testing-fake-timers.md](./docs/testing-fake-timers.md) for a worked example with `useDebouncedValue`, including timer cleanup.
+### Test setup and automatic cleanup
 
-`npm run test:ui` requires the Vitest UI peer dependency (`@vitest/ui`), which
-is not installed by default. Install it at the same major version as `vitest`
-in `package.json` (for example, `vitest@^5.0.5`):
+`src/test/setup.ts` runs before every test file (configured in `vite.config.ts` via `setupFiles`). It does two things automatically so individual tests do not have to.
 
 ```bash
 npm install -D @vitest/ui@^5.0.5
@@ -327,87 +328,51 @@ days; GitHub then deletes it automatically. Once it is gone it can't be
 recovered — re-run the workflow or rebuild locally to produce a fresh `dist/`.
 
 ## Production Dependency Audit
+**React Testing Library cleanup**
 
-CI's `test` job audits production dependencies right after installing them
-(see [`.github/workflows/ci.yml`](./.github/workflows/ci.yml), step
-`Audit dependencies`):
+After each test, `cleanup()` from `@testing-library/react` unmounts every component tree that was rendered during that test and removes its DOM nodes. This is registered with Vitest's `afterEach`:
 
-```bash
-npm audit --omit=dev --audit-level=high
+```ts
+afterEach(() => {
+  cleanup();
+});
 ```
 
-**What the flags do**
+Without this, rendered components would accumulate across tests in the same file, causing false query matches, event-listener leaks, and unpredictable failures.
 
-- `--omit=dev` audits only production dependencies, skipping `devDependencies`.
-  Vulnerabilities in dev-only tooling (Vite, Vitest, ESLint, …) are excluded
-  entirely; only those reachable from a production dependency — including
-  transitive deps — are considered.
-- `--audit-level=high` sets the failure threshold. The command exits non-zero
-  only when a production dependency has a `high` or `critical` advisory; `low`
-  and `moderate` advisories are still reported but do not fail the build.
+**jsdom environment shims**
 
-In short, CI fails only when a production dependency has a `high` or `critical`
-vulnerability.
+jsdom does not implement every browser API. The setup file patches two gaps that several hooks depend on:
 
-**This check is not part of `npm run check`**, which covers lint, typecheck,
-tests, bundle budgets, and secret scanning — but not the audit. Run it
-separately before opening a PR:
+| Shim | Why it is needed |
+|------|-----------------|
+| `window.matchMedia` | `useTheme()` calls `window.matchMedia('(prefers-color-scheme: dark)')` unconditionally on mount. jsdom leaves this undefined, throwing a `TypeError`. The shim returns a minimal object (`matches: false`, no-op `addEventListener`/`removeEventListener`). |
+| `globalThis.localStorage` | `useTheme()` and `useWalletConnection()` read and write `localStorage` on mount. Some jsdom configurations leave it undefined. The shim provides a `Map`-backed in-memory `Storage` object. |
 
-```bash
-npm install                               # keep package-lock.json in sync first
-npm audit --omit=dev --audit-level=high   # the exact command CI runs
+The shims apply globally for the entire test run, so you do not need to mock either API in individual test files.
+
+**Restoring test-specific mocks**
+
+When a test overrides a global or module export with `vi.spyOn` or `vi.fn()`, restore it after the test so it does not affect others. The simplest approach is `vi.restoreAllMocks()` in an `afterEach`:
+
+```ts
+import { afterEach, vi } from "vitest";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 ```
 
-Exit code `0` means the production tree is clean at the `high` threshold; any
-other code means at least one `high`/`critical` advisory was found.
+Alternatively, pass `restoreMocks: true` in the Vitest config to restore every spy automatically. If you only need to reset call counts and return values without removing the spy, use `vi.clearAllMocks()` instead.
 
-**If it fails**, address the reported advisory and re-run until the command
-exits `0`. Safe updates can be auto-applied with `npm audit fix`; for a
-major-version bump or a transitive dependency, update the package that
-introduces it. Always confirm the fix with the same `--omit=dev
---audit-level=high` flags CI uses.
+**Example: overriding `localStorage` for one test**
 
-## CI Concurrency and Cancelled Runs
+The global shim covers the happy path. When you need to test error handling or a specific stored value, replace the shim locally and restore it afterwards:
 
-The workflow sets a top-level `concurrency` block (see
-[`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) that cancels older
-runs when a newer one starts on the same branch or PR:
-
-```yaml
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-```
-
-**Group key.** Runs are grouped by `${{ github.workflow }}-${{ github.ref }}`:
-
-- `github.workflow` is the workflow name — `CI` (from `name: CI`).
-- `github.ref` is the ref that triggered the run: `refs/heads/main` or
-  `refs/heads/dev` for a branch push, or `refs/pull/<number>/merge` for a pull
-  request (for example, `refs/pull/4242/merge`).
-
-Each branch and each PR therefore gets its own group, such as
-`CI-refs/heads/main`, `CI-refs/heads/dev`, or `CI-refs/pull/4242/merge`.
-
-**`cancel-in-progress: true`** makes GitHub cancel the older in-progress run in
-that group whenever a new run starts.
-
-**What this means in practice**
-
-- Pushing a new commit to an open PR cancels that PR's still-running CI — the
-  two pushes share one `refs/pull/<number>/merge` group.
-- Pushing a new commit to `main` cancels the in-progress `main` run; the same
-  applies to `dev`. `main` and `dev` are separate groups, so a push to one does
-  not cancel a run on the other.
-- One PR's push does not cancel another PR's run — different PR numbers mean
-  different refs and different groups.
-- The group is keyed on the workflow name, so only the `CI` workflow is
-  affected; other workflows run independently.
-
-When a run is cancelled, GitHub marks it cancelled and stops any in-progress
-job in it (`test`, `build`, `docker`); jobs that have not started yet will not
-start. This keeps CI fast and avoids running checks against commits you have
-already superseded.
+```ts
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { ThemeToggle } from "./ThemeToggle";
 
 ## CI Job Timeouts
 
@@ -437,21 +402,29 @@ When adding a timeout to a job, set `timeout-minutes` at the job level (next to
 leave its steps unchanged.
 
 ## Secret Scanner
+describe("ThemeToggle", () => {
+  let getItemSpy: ReturnType<typeof vi.spyOn>;
 
-`scripts/scan-secrets.mjs` checks every `.js`, `.html`, `.json`, and `.css`
-file under `dist/` for patterns that look like accidentally bundled credentials:
+  beforeEach(() => {
+    getItemSpy = vi.spyOn(globalThis.localStorage, "getItem");
+  });
 
-| Pattern | Example (fictional) |
-|---------|---------------------|
-| Stellar private key | `SABCDEFGHIJ1234567890ABCDEFGHIJ1234567890ABCDEFGHIJ123456` |
-| PEM private key header | `-----BEGIN OPENSSH PRIVATE KEY-----` |
-| AWS access key | `AKIAIOSFODNN7EXAMPLE` |
+  afterEach(() => {
+    vi.restoreAllMocks(); // removes the spy, restores the shim's original getItem
+  });
 
-Run it after a build:
+  it("defaults to light theme when nothing is stored", () => {
+    getItemSpy.mockReturnValue(null);
+    render(<ThemeToggle />);
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "false");
+  });
 
-```bash
-npm run build
-node scripts/scan-secrets.mjs
+  it("restores dark theme from storage", () => {
+    getItemSpy.mockReturnValue("dark");
+    render(<ThemeToggle />);
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+  });
+});
 ```
 
 **Clean output** (no matches):
@@ -586,6 +559,7 @@ name. Rules from `react-hooks/exhaustive-deps` are not auto-fixable and need
 manual correction; `@typescript-eslint/no-unused-vars` errors are also not
 auto-fixed (rename or prefix unused variables with `_` to suppress them, as
 configured in `eslint.config.js`).
+The `cleanup()` registered in the setup file unmounts the rendered tree after each test, and `vi.restoreAllMocks()` removes the `getItem` spy, so neither the DOM state nor the mock leaks into the next test.
 
 ## Code Standards
 
@@ -652,6 +626,61 @@ Uses Stellar Freighter for wallet connection.
 
 Example public key used in tests and docs: `GABCD...` (placeholder only — never commit
 real keys or secrets).
+
+For testing wallet-dependent components without triggering a real signature request, see
+[Testing wallet interactions](#testing-wallet-interactions) below.
+
+## Testing wallet interactions
+
+Components that call Freighter should never reach the extension during unit tests.
+Mock the hook that wraps the wallet call instead of the extension itself.
+
+`BuyModal` delegates all payment logic to `useBuyResource`. The test suite in
+`src/components/BuyModal.test.tsx` mocks that hook at the module boundary:
+
+```ts
+// At the top of the test file
+vi.mock("../hooks/useBuyResource.js", () => ({
+  useBuyResource: vi.fn(),
+}));
+```
+
+Then each test drives the component into the desired state by configuring the mock's
+return value with `vi.mocked`:
+
+```ts
+// Wallet connected — idle state, pay button enabled
+vi.mocked(useBuyResource).mockReturnValue({
+  status: "idle",
+  result: null,
+  error: null,
+  buy: mockBuy,
+  reset: mockReset,
+});
+render(<BuyModal
+  resourceTitle="Premium Dataset"
+  price="1.50"
+  recipient="GBUYER1XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+  accessUrl="https://api.example.com/resources/abc"
+  walletAddress="GWALLET1XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+  onClose={vi.fn()}
+  onCopyUrl={vi.fn()}
+/>);
+// pay button is now enabled
+expect(screen.getByRole("button", { name: /pay 1\.50 usdc/i })).toBeEnabled();
+```
+
+**Key patterns**
+
+| Scenario | `status` to set | What to assert |
+|---|---|---|
+| No wallet connected | `"idle"` + `walletAddress={null}` | Pay button disabled, "connect your Freighter wallet" notice visible |
+| Payment in flight | `"paying"` | Spinner has `aria-busy="true"`, Close button disabled |
+| Payment succeeded | `"success"` + `result.explorerUrl` | Explorer link rendered with correct `href` |
+| Payment failed | `"error"` + `error` message | Error text visible, "Try again" button calls `buy` |
+
+Because the mock controls all state transitions, tests run offline and never prompt
+the Freighter browser extension for a signature.
 
 ## Payment Integration
 
