@@ -5,8 +5,11 @@ A Stellar-powered marketplace UI built with React, TypeScript, Vite, and Tailwin
 ## Local Development
 
 ### Prerequisites
-- Node.js 20+
+- Node.js >=24.15.0 (see `engines` in `package.json`)
 - npm (or pnpm)
+
+The repo pins its Node version in `.nvmrc`. If you use nvm, run `nvm use` from the
+project root to switch to the pinned Node 24 release before installing dependencies.
 
 ### Setup
 
@@ -23,7 +26,9 @@ npm run dev
 # Open http://localhost:5173
 ```
 
-Dev server includes hot module reload and TypeScript checking.
+The Vite dev server provides hot module reload, but it does **not** typecheck your
+code — Vite strips types without checking them. Run `npm run typecheck`
+(`tsc --noEmit`) separately to catch type errors, and run it before opening a PR.
 
 ## Docker Development
 
@@ -103,11 +108,15 @@ classes that adapt to light/dark automatically. Read
 
 ## Adding a New Page
 
-1. **Create component:** `src/pages/MyPage.tsx`
-2. **Add route:** Update `src/App.tsx`
-3. **Add tests:** `src/pages/MyPage.test.tsx`
-4. **Update nav:** Add link in main navigation
-5. **Test:** `npm run dev` and verify routing works
+Pages are rendered as tabs from `src/App.tsx`; there is no `src/pages` directory.
+
+1. **Create component:** `src/components/MyPage.tsx`
+2. **Add tests:** `src/components/MyPage.test.tsx`
+3. **Wire it into the tab navigation in `src/App.tsx`:**
+   - Extend the `Tab` union with your new tab id (e.g. `'my-page'`)
+   - Add a nav entry for the tab in the navigation list
+   - Render `<MyPage />` in the tab switch for that id
+4. **Test:** `npm run dev` and verify the tab renders and switches correctly
 
 ## Commit Format (Conventional Commits)
 
@@ -137,7 +146,15 @@ perf(catalog): memoize ResourceCard component
 
 ## Wallet Integration
 
-Uses Stellar Freighter for wallet connection. See `src/api/agent.ts` for integration patterns.
+Uses Stellar Freighter for wallet connection.
+
+- [`src/lib/freighter.ts`](./src/lib/freighter.ts) — Freighter helpers such as
+  `loadFreighter`, `signWithFreighter`, and `isFreighterInstalled`
+- [`src/hooks/useWalletConnection.ts`](./src/hooks/useWalletConnection.ts) — connection
+  state, `connect`/`disconnect`, and restore-on-mount behavior
+
+Example public key used in tests and docs: `GABCD...` (placeholder only — never commit
+real keys or secrets).
 
 ## Payment Integration
 
