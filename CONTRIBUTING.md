@@ -163,15 +163,20 @@ docker stop web && docker rm web
 
 3. **Before committing, verify:**
    ```bash
-   npm run lint        # ESLint passes (CI enforces it)
+   npm run lint:fix    # Auto-fix style issues, then review the diff
+   npm run lint        # Confirm no remaining lint errors (CI enforces it)
    npm run typecheck   # Type safety
    npm run test        # All tests pass
    npm run build       # Production build works
    # or simply: npm run check
+   node scripts/scan-secrets.mjs   # No credentials in built assets
    ```
 
    To verify the built output locally, see
    [Previewing a Production Build](#previewing-a-production-build).
+   For details on reviewing auto-fix changes, see [Linting](#linting).
+   To understand what the secret scanner checks and how to interpret its
+   output, see [Secret Scanner](#secret-scanner).
 
 4. **Commit with conventional format (see below)**
 
@@ -226,6 +231,110 @@ This runs the production build with `NODE_ENV=production` and writes the
 generated assets to the `dist/` directory. Deploy or inspect `dist/` after the
 command completes.
 
+## Secret Scanner
+
+`scripts/scan-secrets.mjs` checks every `.js`, `.html`, `.json`, and `.css`
+file under `dist/` for patterns that look like accidentally bundled credentials:
+
+| Pattern | Example (fictional) |
+|---------|---------------------|
+| Stellar private key | `SABCDEFGHIJ1234567890ABCDEFGHIJ1234567890ABCDEFGHIJ123456` |
+| PEM private key header | `-----BEGIN OPENSSH PRIVATE KEY-----` |
+| AWS access key | `AKIAIOSFODNN7EXAMPLE` |
+
+Run it after a build:
+
+```bash
+npm run build
+node scripts/scan-secrets.mjs
+```
+
+**Clean output** (no matches):
+
+```
+Built assets: no recognized private-key patterns found.
+```
+
+**Failure output** (match found):
+
+```
+dist/assets/index-Dq3kL8mN.js: possible Stellar private key
+```
+
+The scanner prints only the file path and pattern label — never the matched
+value itself. The process exits with code 1 when any match is found, so it
+blocks CI the same way a failing test does.
+
+If you get a false positive from a test fixture or generated stub, check that
+no real credential was accidentally inlined into the bundle. If the match is
+genuinely a non-secret (for example, a base32 string that happens to match the
+Stellar key regex), move the value out of the bundled source or rename it so
+it no longer matches.
+
+## Linting
+
+The project uses ESLint with the TypeScript and React Hooks plugins. CI runs
+`npm run lint` and fails the build on any error, so lint must pass before you
+push.
+
+```bash
+npm run lint        # Report all lint errors (read-only)
+npm run lint:fix    # Auto-fix what ESLint can correct in place
+```
+
+`lint:fix` rewrites files directly — it does not stage or commit anything.
+After running it, review the diff before you stage so you understand every
+change:
+
+```bash
+npm run lint:fix
+git diff            # Review all edits made by the auto-fixer
+git add -p          # Stage interactively if you want fine-grained control
+```
+
+Not every error is auto-fixable. Formatting changes (quote style, semicolons,
+trailing commas) and simple import ordering are fixed automatically; logic
+errors flagged by the React Hooks plugin (missing dependencies in `useEffect`,
+conditional hook calls) require manual correction. After `lint:fix`, re-run
+`npm run lint` to confirm no errors remain.
+
+### Linting a single file
+
+When you only want to check one file — for example while iterating on a
+component — pass the path directly to `npx eslint`:
+
+```bash
+npx eslint src/components/ResourceCard.tsx
+```
+
+To auto-fix that file alone:
+
+```bash
+npx eslint --fix src/components/ResourceCard.tsx
+```
+
+The config (`eslint.config.js`) lints `**/*.{ts,tsx}` source files plus
+`*.config.{js,ts}` and `scripts/**/*.{js,mjs}`. Passing a path outside those
+patterns (for example a plain `.js` file in `src/`) produces no output because
+no rule block matches it — not because the file is error-free.
+
+Example output for a file with errors:
+
+```
+/workspaces/frontend/src/components/ResourceCard.tsx
+  12:7  error  'setItems' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  28:3  error  React Hook useEffect has a missing dependency: 'fetchData'  react-hooks/exhaustive-deps
+
+✖ 2 problems (2 errors, 0 warnings)
+  0 errors and 0 warnings potentially fixable with the `--fix` option.
+```
+
+The first column is the line:column of the finding, the second is the rule
+name. Rules from `react-hooks/exhaustive-deps` are not auto-fixable and need
+manual correction; `@typescript-eslint/no-unused-vars` errors are also not
+auto-fixed (rename or prefix unused variables with `_` to suppress them, as
+configured in `eslint.config.js`).
+
 ## Code Standards
 
 - **TypeScript**: Strict mode, no `any` without comment
@@ -272,6 +381,7 @@ perf(catalog): memoize ResourceCard component
 - [ ] Lint passes (`npm run lint`)
 - [ ] TypeScript compiles (`npm run typecheck`)
 - [ ] Tests pass (`npm run test`)
+- [ ] Secret scanner passes (`node scripts/scan-secrets.mjs` after `npm run build`)
 - [ ] Bundle size acceptable (check Vite output)
 - [ ] No hardcoded colors/spacing (use CSS vars)
 - [ ] Accessible (keyboard nav, ARIA labels)
