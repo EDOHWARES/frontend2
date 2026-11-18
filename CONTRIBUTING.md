@@ -236,6 +236,9 @@ npm run test:ui       # Visual UI for test runner
 
 Tests use Vitest + React Testing Library. Focus on user behavior, not implementation details.
 
+Vitest packages are bumped by Dependabot in separate PRs — see
+[Dependabot Updates](#dependabot-updates) for keeping them in step.
+
 ### Vitest UI Peer Dependency
 
 `npm run test:ui` requires the Vitest UI peer dependency (`@vitest/ui`), which
@@ -271,6 +274,32 @@ This runs the production build with `NODE_ENV=production` and writes the
 generated assets to the `dist/` directory. Deploy or inspect `dist/` after the
 command completes. CI's `build` job also uploads its own `dist/` output as a
 downloadable artifact — see [CI dist Artifact](#ci-dist-artifact).
+
+### build:prod on Windows
+
+The script is currently defined as:
+
+```json
+"build:prod": "NODE_ENV=production vite build"
+```
+
+The `NODE_ENV=production <command>` prefix is POSIX shell syntax. It works in
+bash, zsh, Git Bash, and WSL, but fails in the default Windows command shell
+(`cmd.exe`) and in PowerShell, which do not support inline environment
+assignment — npm reports that `NODE_ENV` is not recognized as a command.
+
+**Portable alternative.** `vite build` already runs in `production` mode by
+default, so plain `npm run build` emits the same production assets to `dist/`
+on every platform:
+
+```bash
+npm run build
+```
+
+Use `npm run build` on Windows, or run `npm run build:prod` from Git Bash or
+WSL. Either way, check that `dist/` contains hashed, minified assets under
+`dist/assets/`. Do not add a dependency (such as `cross-env`) solely to set
+`NODE_ENV` for this script.
 
 ## CI dist Artifact
 
@@ -380,6 +409,33 @@ job in it (`test`, `build`, `docker`); jobs that have not started yet will not
 start. This keeps CI fast and avoids running checks against commits you have
 already superseded.
 
+## CI Job Timeouts
+
+None of the CI jobs (`test`, `build`, `docker` in
+[`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) currently set
+`timeout-minutes`. GitHub Actions therefore applies its platform default of
+**360 minutes (6 hours)** per job.
+
+**What this means in practice.** A stalled command — a hung `npm ci`, a test
+that never resolves, or a container that never becomes healthy — keeps the
+runner busy until the default limit is hit, rather than failing fast. Normal
+runs finish in a few minutes, so a job still running far beyond that is almost
+certainly stuck.
+
+**If a job appears stuck**
+
+1. Open the run in the repository's Actions tab and check the last log line of
+   the running step to see which command stalled.
+2. Click **Cancel workflow** to free the runner — don't wait for the 6-hour
+   limit. (Pushing a new commit to the same branch or PR also cancels it; see
+   [CI Concurrency and Cancelled Runs](#ci-concurrency-and-cancelled-runs).)
+3. Reproduce the stalled step locally (for example `npm test` or the
+   [Local Docker Smoke Checks](#local-docker-smoke-checks)) before re-running.
+
+When adding a timeout to a job, set `timeout-minutes` at the job level (next to
+`runs-on`), choose a value comfortably above the job's typical duration, and
+leave its steps unchanged.
+
 ## Secret Scanner
 
 `scripts/scan-secrets.mjs` checks every `.js`, `.html`, `.json`, and `.css`
@@ -414,11 +470,58 @@ The scanner prints only the file path and pattern label — never the matched
 value itself. The process exits with code 1 when any match is found, so it
 blocks CI the same way a failing test does.
 
+### Where the scan runs
+
+The scanner reads `dist/`, so it must always run **after** a build. It is
+currently invoked directly with `node` in two places (there is no dedicated
+npm script for it yet):
+
+| Where | Invocation | Runs after |
+|-------|-----------|------------|
+| `npm run check` (`package.json`) | `... && npm run bundle:check && node scripts/scan-secrets.mjs` | `bundle:check`, which runs `npm run build` |
+| CI `build` job, step `Scan for leaked secrets` | `node scripts/scan-secrets.mjs` | `Build` and `Enforce bundle size budgets` |
+
+In both places a non-zero exit fails the run: `npm run check` stops at the
+`&&` chain, and the CI step fails the `build` job (so the `dist` artifact is
+not uploaded). If you change how the scanner is invoked, update both places
+together and keep it after the build step.
+
 If you get a false positive from a test fixture or generated stub, check that
 no real credential was accidentally inlined into the bundle. If the match is
 genuinely a non-secret (for example, a base32 string that happens to match the
 Stellar key regex), move the value out of the bundled source or rename it so
 it no longer matches.
+
+## Dependabot Updates
+
+Dependabot is configured in
+[`.github/dependabot.yml`](./.github/dependabot.yml):
+
+| Ecosystem | Directory | Schedule | Open PR limit |
+|-----------|-----------|----------|---------------|
+| `npm` | `/` | weekly | 5 |
+| `github-actions` | `/` | weekly | default (5) |
+
+No `groups` are defined, so Dependabot opens **one pull request per
+dependency**. Security updates are raised independently of this weekly
+schedule and are not affected by the PR limit.
+
+**Coupled Vitest tooling.** `vitest` and its companion packages — such as
+`@vitest/ui` (needed for `npm run test:ui`, see
+[Vitest UI Peer Dependency](#vitest-ui-peer-dependency)) and any
+`@vitest/coverage-*` provider — must stay on the same version. Because they
+arrive as separate PRs, merging only one of them can leave the toolchain
+mismatched. When reviewing a Vitest-related Dependabot PR:
+
+1. Check for sibling PRs bumping other `vitest` / `@vitest/*` packages.
+2. Merge them together (or combine them into one branch) so the versions stay
+   aligned.
+3. Run `npm test` — and `npm run test:ui` if you have `@vitest/ui` installed —
+   before merging.
+
+If you add a `groups` entry to `dependabot.yml`, keep the existing weekly
+schedule and leave unrelated dependencies ungrouped, then validate the YAML
+before committing.
 
 ## Linting
 
