@@ -59,6 +59,85 @@ npm run docker:run
 # Open http://localhost:8080
 ```
 
+See [Local Docker Smoke Checks](#local-docker-smoke-checks) to verify the
+container is healthy before pushing. If port 8080 is already in use, see
+[Port 8080 already in use?](#port-8080-already-in-use).
+
+## Local Docker Smoke Checks
+
+CI runs three checks against the container on port 8080 (see
+[`.github/workflows/ci.yml`](./.github/workflows/ci.yml), job `docker`).
+Run the same checks locally to catch regressions before they hit CI.
+
+### 1. Start the container
+
+```bash
+docker build -t synapsvault-frontend:local .
+docker run -d --name web -p 8080:8080 synapsvault-frontend:local
+```
+
+### 2. Health endpoint
+
+The image exposes a `/health` route. Poll it until the server is ready (it
+may take a few seconds to start), then assert a 200 response:
+
+```bash
+for i in $(seq 1 15); do
+  curl -fsS http://localhost:8080/health && break
+  sleep 1
+done
+curl -fsS http://localhost:8080/health
+```
+
+A successful response means the server is up and the health route is reachable.
+
+### 3. App-shell check
+
+The root path must return the HTML app shell — specifically the `<div
+id="root">` mount point that React attaches to:
+
+```bash
+curl -fsS http://localhost:8080/ | grep -q '<div id="root">'
+```
+
+### 4. Deep-link / SPA fallback check
+
+The server must serve the same app shell for any path, so that client-side
+routes such as `/marketplace/listing/abc123` work after a hard refresh or
+direct navigation:
+
+```bash
+curl -fsS http://localhost:8080/marketplace/listing/abc123 | grep -q '<div id="root">'
+```
+
+If this check fails, the server is not configured to fall back unknown paths to
+`index.html`. Fix the Nginx (or equivalent) `try_files` rule in the
+`Dockerfile`.
+
+### 5. Docker HEALTHCHECK status
+
+The image defines its own `HEALTHCHECK` instruction. After the checks above,
+verify that Docker itself reports the container as `healthy`:
+
+```bash
+for i in $(seq 1 20); do
+  status=$(docker inspect --format '{{.State.Health.Status}}' web)
+  [ "$status" = healthy ] && break
+  sleep 2
+done
+echo "container health: $status"
+[ "$status" = healthy ]
+```
+
+If the status stays `starting` or flips to `unhealthy`, see
+[Container stays unhealthy or won't start](#container-stays-unhealthy-or-wont-start).
+
+### Cleanup
+
+```bash
+docker stop web && docker rm web
+```
+
 ## Branch Strategy
 
 | Branch | Purpose | Deploy Target |
@@ -222,6 +301,84 @@ Uses x402 protocol via `@x402/fetch` and `@x402/stellar`. See `src/api/payments.
 ```bash
 npm run dev -- --port 5174
 ```
+
+**Port 8080 already in use?**
+
+`npm run docker:run` always binds host port 8080 (it runs
+`docker run -p 8080:8080 …`). The script accepts no port argument, so call
+`docker run` directly to map a different host port to the container's fixed
+port 8080:
+
+```bash
+docker run -p 9090:8080 synapsvault-frontend:latest
+# Open http://localhost:9090
+```
+
+Replace `9090` with any free port. The container always listens on 8080
+internally; only the host side of `-p HOST:8080` changes.
+
+**Container stays unhealthy or won't start?**
+
+The `Dockerfile` configures the health check as:
+
+```
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --start-interval=2s
+  CMD wget -qO- http://127.0.0.1:8080/health || exit 1
+```
+
+Docker probes `/health` every 2 seconds during the 10-second start period, then
+every 30 seconds after that. A probe must respond within 5 seconds. After three
+consecutive failures the container is marked `unhealthy`.
+
+**Read the health-check log** to see exactly which probes passed or failed and
+what output they returned:
+
+```bash
+docker inspect --format '{{json .State.Health}}' web
+```
+
+Example output (fictional):
+
+```json
+{
+  "Status": "unhealthy",
+  "FailingStreak": 3,
+  "Log": [
+    {
+      "Start": "2024-11-01T12:00:00.000Z",
+      "End":   "2024-11-01T12:00:05.001Z",
+      "ExitCode": 1,
+      "Output": "wget: can't connect to remote host (127.0.0.1): Connection refused\n"
+    }
+  ]
+}
+```
+
+`ExitCode: 0` means the probe succeeded; any other value means it failed.
+`Output` contains whatever `wget` (or the error) printed to stdout/stderr.
+
+**Read the container logs** to see nginx startup errors and request logs:
+
+```bash
+docker logs web
+```
+
+The image runs nginx in the foreground (`daemon off`), so all nginx output —
+including startup errors, access logs, and error logs — goes straight to
+stdout/stderr and appears in `docker logs`. Add `--tail 50` to limit output or
+`-f` to follow in real time:
+
+```bash
+docker logs --tail 50 web   # last 50 lines
+docker logs -f web           # stream live
+```
+
+Common things to look for:
+
+- `[emerg]` lines indicate nginx failed to start (usually a config syntax error).
+- `"GET /health HTTP/1.1" 200` confirms health probes are reaching nginx.
+- A complete absence of request lines while the status is `unhealthy` means
+  the port binding failed before nginx could accept connections.
 
 **Build too large?**
 ```bash
