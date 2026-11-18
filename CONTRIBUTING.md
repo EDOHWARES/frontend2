@@ -236,253 +236,82 @@ npm run test:ui       # Visual UI for test runner
 
 Tests use Vitest + React Testing Library. Focus on user behavior, not implementation details.
 
-### Vitest UI Peer Dependency
+### Test setup and automatic cleanup
 
-`npm run test:ui` requires the Vitest UI peer dependency (`@vitest/ui`), which
-is not installed by default. Install it at the same major version as `vitest`
-in `package.json` (for example, `vitest@^5.0.5`):
+`src/test/setup.ts` runs before every test file (configured in `vite.config.ts` via `setupFiles`). It does two things automatically so individual tests do not have to.
 
-```bash
-npm install -D @vitest/ui@^5.0.5
+**React Testing Library cleanup**
+
+After each test, `cleanup()` from `@testing-library/react` unmounts every component tree that was rendered during that test and removes its DOM nodes. This is registered with Vitest's `afterEach`:
+
+```ts
+afterEach(() => {
+  cleanup();
+});
 ```
 
-Then run `npm run test:ui` to open the visual test runner.
+Without this, rendered components would accumulate across tests in the same file, causing false query matches, event-listener leaks, and unpredictable failures.
 
-## Previewing a Production Build
+**jsdom environment shims**
 
-Build the app and serve the generated assets locally:
+jsdom does not implement every browser API. The setup file patches two gaps that several hooks depend on:
 
-```bash
-npm run build     # Outputs to dist/
-npm run preview   # Serves the built assets (default: http://localhost:4173)
+| Shim | Why it is needed |
+|------|-----------------|
+| `window.matchMedia` | `useTheme()` calls `window.matchMedia('(prefers-color-scheme: dark)')` unconditionally on mount. jsdom leaves this undefined, throwing a `TypeError`. The shim returns a minimal object (`matches: false`, no-op `addEventListener`/`removeEventListener`). |
+| `globalThis.localStorage` | `useTheme()` and `useWalletConnection()` read and write `localStorage` on mount. Some jsdom configurations leave it undefined. The shim provides a `Map`-backed in-memory `Storage` object. |
+
+The shims apply globally for the entire test run, so you do not need to mock either API in individual test files.
+
+**Restoring test-specific mocks**
+
+When a test overrides a global or module export with `vi.spyOn` or `vi.fn()`, restore it after the test so it does not affect others. The simplest approach is `vi.restoreAllMocks()` in an `afterEach`:
+
+```ts
+import { afterEach, vi } from "vitest";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 ```
 
-`npm run preview` serves the files produced by `npm run build` — it does not
-run the dev server, hot module reload, or the dev proxy. Use it to check the
-production bundle before opening a PR.
+Alternatively, pass `restoreMocks: true` in the Vitest config to restore every spy automatically. If you only need to reset call counts and return values without removing the spy, use `vi.clearAllMocks()` instead.
 
-## Production Build (build:prod)
+**Example: overriding `localStorage` for one test**
 
-```bash
-npm run build:prod
+The global shim covers the happy path. When you need to test error handling or a specific stored value, replace the shim locally and restore it afterwards:
+
+```ts
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { ThemeToggle } from "./ThemeToggle";
+
+describe("ThemeToggle", () => {
+  let getItemSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    getItemSpy = vi.spyOn(globalThis.localStorage, "getItem");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks(); // removes the spy, restores the shim's original getItem
+  });
+
+  it("defaults to light theme when nothing is stored", () => {
+    getItemSpy.mockReturnValue(null);
+    render(<ThemeToggle />);
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("restores dark theme from storage", () => {
+    getItemSpy.mockReturnValue("dark");
+    render(<ThemeToggle />);
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+  });
+});
 ```
 
-This runs the production build with `NODE_ENV=production` and writes the
-generated assets to the `dist/` directory. Deploy or inspect `dist/` after the
-command completes. CI's `build` job also uploads its own `dist/` output as a
-downloadable artifact — see [CI dist Artifact](#ci-dist-artifact).
-
-## CI dist Artifact
-
-The `build` job (see [`.github/workflows/ci.yml`](./.github/workflows/ci.yml),
-step `Upload dist artifact`) uploads its build output as a named artifact:
-
-```yaml
-- name: Upload dist artifact
-  uses: actions/upload-artifact@v7
-  with:
-    name: dist
-    path: dist/
-    retention-days: 7
-```
-
-**Where it appears.** Once the run finishes, the `dist` artifact is listed in
-the **Artifacts** section of the workflow run's summary page — open the
-repository's Actions tab, click the CI run, and scroll to "Artifacts". It
-holds the contents of the `dist/` directory produced by `npm run build` in the
-`build` job. Download it as a zip to inspect that exact build without
-rebuilding locally.
-
-**Retention.** `retention-days: 7` keeps the artifact downloadable for seven
-days; GitHub then deletes it automatically. Once it is gone it can't be
-recovered — re-run the workflow or rebuild locally to produce a fresh `dist/`.
-
-## Production Dependency Audit
-
-CI's `test` job audits production dependencies right after installing them
-(see [`.github/workflows/ci.yml`](./.github/workflows/ci.yml), step
-`Audit dependencies`):
-
-```bash
-npm audit --omit=dev --audit-level=high
-```
-
-**What the flags do**
-
-- `--omit=dev` audits only production dependencies, skipping `devDependencies`.
-  Vulnerabilities in dev-only tooling (Vite, Vitest, ESLint, …) are excluded
-  entirely; only those reachable from a production dependency — including
-  transitive deps — are considered.
-- `--audit-level=high` sets the failure threshold. The command exits non-zero
-  only when a production dependency has a `high` or `critical` advisory; `low`
-  and `moderate` advisories are still reported but do not fail the build.
-
-In short, CI fails only when a production dependency has a `high` or `critical`
-vulnerability.
-
-**This check is not part of `npm run check`**, which covers lint, typecheck,
-tests, bundle budgets, and secret scanning — but not the audit. Run it
-separately before opening a PR:
-
-```bash
-npm install                               # keep package-lock.json in sync first
-npm audit --omit=dev --audit-level=high   # the exact command CI runs
-```
-
-Exit code `0` means the production tree is clean at the `high` threshold; any
-other code means at least one `high`/`critical` advisory was found.
-
-**If it fails**, address the reported advisory and re-run until the command
-exits `0`. Safe updates can be auto-applied with `npm audit fix`; for a
-major-version bump or a transitive dependency, update the package that
-introduces it. Always confirm the fix with the same `--omit=dev
---audit-level=high` flags CI uses.
-
-## CI Concurrency and Cancelled Runs
-
-The workflow sets a top-level `concurrency` block (see
-[`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) that cancels older
-runs when a newer one starts on the same branch or PR:
-
-```yaml
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-```
-
-**Group key.** Runs are grouped by `${{ github.workflow }}-${{ github.ref }}`:
-
-- `github.workflow` is the workflow name — `CI` (from `name: CI`).
-- `github.ref` is the ref that triggered the run: `refs/heads/main` or
-  `refs/heads/dev` for a branch push, or `refs/pull/<number>/merge` for a pull
-  request (for example, `refs/pull/4242/merge`).
-
-Each branch and each PR therefore gets its own group, such as
-`CI-refs/heads/main`, `CI-refs/heads/dev`, or `CI-refs/pull/4242/merge`.
-
-**`cancel-in-progress: true`** makes GitHub cancel the older in-progress run in
-that group whenever a new run starts.
-
-**What this means in practice**
-
-- Pushing a new commit to an open PR cancels that PR's still-running CI — the
-  two pushes share one `refs/pull/<number>/merge` group.
-- Pushing a new commit to `main` cancels the in-progress `main` run; the same
-  applies to `dev`. `main` and `dev` are separate groups, so a push to one does
-  not cancel a run on the other.
-- One PR's push does not cancel another PR's run — different PR numbers mean
-  different refs and different groups.
-- The group is keyed on the workflow name, so only the `CI` workflow is
-  affected; other workflows run independently.
-
-When a run is cancelled, GitHub marks it cancelled and stops any in-progress
-job in it (`test`, `build`, `docker`); jobs that have not started yet will not
-start. This keeps CI fast and avoids running checks against commits you have
-already superseded.
-
-## Secret Scanner
-
-`scripts/scan-secrets.mjs` checks every `.js`, `.html`, `.json`, and `.css`
-file under `dist/` for patterns that look like accidentally bundled credentials:
-
-| Pattern | Example (fictional) |
-|---------|---------------------|
-| Stellar private key | `SABCDEFGHIJ1234567890ABCDEFGHIJ1234567890ABCDEFGHIJ123456` |
-| PEM private key header | `-----BEGIN OPENSSH PRIVATE KEY-----` |
-| AWS access key | `AKIAIOSFODNN7EXAMPLE` |
-
-Run it after a build:
-
-```bash
-npm run build
-node scripts/scan-secrets.mjs
-```
-
-**Clean output** (no matches):
-
-```
-Built assets: no recognized private-key patterns found.
-```
-
-**Failure output** (match found):
-
-```
-dist/assets/index-Dq3kL8mN.js: possible Stellar private key
-```
-
-The scanner prints only the file path and pattern label — never the matched
-value itself. The process exits with code 1 when any match is found, so it
-blocks CI the same way a failing test does.
-
-If you get a false positive from a test fixture or generated stub, check that
-no real credential was accidentally inlined into the bundle. If the match is
-genuinely a non-secret (for example, a base32 string that happens to match the
-Stellar key regex), move the value out of the bundled source or rename it so
-it no longer matches.
-
-## Linting
-
-The project uses ESLint with the TypeScript and React Hooks plugins. CI runs
-`npm run lint` and fails the build on any error, so lint must pass before you
-push.
-
-```bash
-npm run lint        # Report all lint errors (read-only)
-npm run lint:fix    # Auto-fix what ESLint can correct in place
-```
-
-`lint:fix` rewrites files directly — it does not stage or commit anything.
-After running it, review the diff before you stage so you understand every
-change:
-
-```bash
-npm run lint:fix
-git diff            # Review all edits made by the auto-fixer
-git add -p          # Stage interactively if you want fine-grained control
-```
-
-Not every error is auto-fixable. Formatting changes (quote style, semicolons,
-trailing commas) and simple import ordering are fixed automatically; logic
-errors flagged by the React Hooks plugin (missing dependencies in `useEffect`,
-conditional hook calls) require manual correction. After `lint:fix`, re-run
-`npm run lint` to confirm no errors remain.
-
-### Linting a single file
-
-When you only want to check one file — for example while iterating on a
-component — pass the path directly to `npx eslint`:
-
-```bash
-npx eslint src/components/ResourceCard.tsx
-```
-
-To auto-fix that file alone:
-
-```bash
-npx eslint --fix src/components/ResourceCard.tsx
-```
-
-The config (`eslint.config.js`) lints `**/*.{ts,tsx}` source files plus
-`*.config.{js,ts}` and `scripts/**/*.{js,mjs}`. Passing a path outside those
-patterns (for example a plain `.js` file in `src/`) produces no output because
-no rule block matches it — not because the file is error-free.
-
-Example output for a file with errors:
-
-```
-/workspaces/frontend/src/components/ResourceCard.tsx
-  12:7  error  'setItems' is assigned a value but never used  @typescript-eslint/no-unused-vars
-  28:3  error  React Hook useEffect has a missing dependency: 'fetchData'  react-hooks/exhaustive-deps
-
-✖ 2 problems (2 errors, 0 warnings)
-  0 errors and 0 warnings potentially fixable with the `--fix` option.
-```
-
-The first column is the line:column of the finding, the second is the rule
-name. Rules from `react-hooks/exhaustive-deps` are not auto-fixable and need
-manual correction; `@typescript-eslint/no-unused-vars` errors are also not
-auto-fixed (rename or prefix unused variables with `_` to suppress them, as
-configured in `eslint.config.js`).
+The `cleanup()` registered in the setup file unmounts the rendered tree after each test, and `vi.restoreAllMocks()` removes the `getItem` spy, so neither the DOM state nor the mock leaks into the next test.
 
 ## Code Standards
 
