@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef, lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import { Toast } from "./components/Toast.js";
+import { ServiceWorkerUpdatePrompt } from "./components/ServiceWorkerUpdatePrompt.js";
 import { ResourceGridSkeleton } from "./components/ResourceCardSkeleton.js";
 import { ErrorBanner } from "./components/ErrorBanner.js";
 import { CatalogStaleBanner } from "./components/CatalogStaleBanner.js";
@@ -17,8 +18,11 @@ import { useKeyboardShortcuts, type ShortcutMap } from "./hooks/useKeyboardShort
 import { fetchRegistryStatus } from "./api/resources.js";
 import type { CatalogFilters } from "./api/resources.js";
 import { loadLocale } from "./i18n/config.js";
+import { authenticateWithWallet, getSessionToken, clearSession, authState } from "./lib/session.js";
+import { sessionApi } from "./api/session.js";
+import { loadFreighter } from "./lib/freighter.js";
 import { STELLAR_NETWORK } from "./lib/config.js";
-import { FREIGHTER_INSTALL_URL } from "./lib/freighter.js";
+import { FREIGHTER_INSTALL_URL, FREIGHTER_NOT_FOUND_CODE } from "./lib/freighter.js";
 
 export type { Resource };
 
@@ -146,7 +150,7 @@ export default function App() {
   const [activeModal, setActiveModal]   = useState<ActiveModal>(null);
   const [toast, setToast]               = useState<{ message: string; fallbackUrl?: string } | null>(null);
   const [filters, setFilters]           = useState<CatalogFilters>(DEFAULT_FILTERS);
-  const [overrides, setOverrides]       = useState<Record<string, Partial<Resource>>>({});
+  const [overrides, setOverrides]       = useState<Record<string, { source: Resource[] | null; patch: Partial<Resource> }>>({});
   const [tab, setTab]                   = useState<Tab>("catalog");
   const [showPublish, setShowPublish]   = useState(false);
   const [sidebarOpen, setSidebarOpen]   = useState(false);
@@ -155,15 +159,16 @@ export default function App() {
   /** Last catalog fetched with no filters: drives "N of TOTAL" and the hero stats. */
   const [unfiltered, setUnfiltered]     = useState<Resource[] | null>(null);
   /** id → title for every resource seen, so Purchases can name what was bought. */
-  const resourceTitlesRef               = useRef<Record<string, string>>({});
+  const [resourceTitles, setResourceTitles] = useState<Record<string, string>>({});
   const searchInputRef                  = useRef<HTMLInputElement>(null);
   const { theme, toggleTheme }          = useTheme();
   const wallet                          = useWalletConnection();
   const { t, i18n }                     = useTranslation();
   /** Session token obtained via wallet-signature login; gates creator features. */
-  const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [sessionToken, setSessionToken] = useState<string | null>(() => getSessionToken());
   const [signingIn, setSigningIn]       = useState(false);
   const isAuthenticated                 = Boolean(sessionToken);
+  useEffect(() => authState.subscribe((state) => setSessionToken(state.token)), []);
 
   /* catalog — debounced so typing doesn't fire a request per keystroke */
   const debouncedFilters = useDebouncedValue(filters, 250);
@@ -182,16 +187,26 @@ export default function App() {
 
   const resources = useMemo((): Resource[] => {
     if (!rawResources) return [];
-    return rawResources.map((r) => ({ ...r, ...(overrides[r.id] ?? {}) }));
+    
+    // A fresh server response supersedes optimistic edits from the previous response.
+    return rawResources.map((r) => ({ ...r, ...(overrides[r.id]?.source === rawResources ? overrides[r.id].patch : {}) }));
   }, [rawResources, overrides]);
 
   useEffect(() => {
     if (resourcesStatus !== "success" || !loadedFilters || hasActiveFilters(loadedFilters)) return;
+    // Retain the last unfiltered response across subsequent filtered searches.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setUnfiltered(resources);
   }, [resourcesStatus, loadedFilters, resources]);
 
   useEffect(() => {
-    for (const r of resources) resourceTitlesRef.current[r.id] = r.title;
+    // Remember titles from prior pages for purchase receipt labels.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setResourceTitles((prev) => {
+      const updated = { ...prev };
+      for (const r of resources) updated[r.id] = r.title;
+      return updated;
+    });
   }, [resources]);
 
   const sortedResources = useMemo(() => sortResources(resources, sort), [resources, sort]);
@@ -208,8 +223,8 @@ export default function App() {
   }, [unfiltered, resources]);
 
   const applyOverride = useCallback((id: string, patch: Partial<Resource>) => {
-    setOverrides((prev) => ({ ...prev, [id]: { ...(prev[id] ?? {}), ...patch } }));
-  }, []);
+    setOverrides((prev) => ({ ...prev, [id]: { source: rawResources, patch: { ...(prev[id]?.source === rawResources ? prev[id].patch : {}), ...patch } } }));
+  }, [rawResources]);
 
   const closeModal = useCallback(() => setActiveModal(null), []);
   const dismissToast = useCallback(() => setToast(null), []);
@@ -236,7 +251,15 @@ export default function App() {
 
   const toggleLanguage = useCallback(async () => {
     const next = i18n.language === "en" ? "es" : "en";
-    await loadLocale(next);
+    try {
+
+      await loadLocale(next);
+
+    } catch (error) {
+
+      console.error("Failed to load locale", error);
+
+    }
     await i18n.changeLanguage(next);
     document.documentElement.lang = next;
   }, [i18n]);
@@ -256,10 +279,17 @@ export default function App() {
         address = await wallet.connect();
       }
       if (!address) throw new Error(t("app.signin_failed"));
-      const message = `Sign in to ${t("app.title")}\nAddress: ${address}\nIssued: ${new Date().toISOString()}`;
-      const token = await wallet.signMessage(message);
-      if (!token) throw new Error(t("app.signin_failed"));
-      setSessionToken(token);
+      const session = await authenticateWithWallet(address, async (challenge) => {
+        const freighter = await loadFreighter();
+        const result = await freighter.signMessage(challenge, { address });
+        if (result.error || !result.signedMessage || result.signerAddress !== address) {
+          throw new Error("Wallet authentication was not approved for this account.");
+        }
+        return typeof result.signedMessage === "string"
+          ? result.signedMessage
+          : btoa(String.fromCharCode(...result.signedMessage));
+      }, sessionApi);
+      setSessionToken(session.token);
       setToast({ message: t("app.signed_in") });
     } catch (err) {
       setToast({ message: err instanceof Error ? err.message : t("app.signin_failed") });
@@ -269,6 +299,7 @@ export default function App() {
   }, [signingIn, wallet, t]);
 
   const signOut = useCallback(() => {
+    clearSession();
     setSessionToken(null);
     if (tab === "dashboard" || tab === "analytics") setTab("catalog");
   }, [tab]);
@@ -427,7 +458,7 @@ export default function App() {
             <span className="synapse-topbar__label">{t("app.sign_in")}</span>
           </button>
         )}
-        <button className="synapse-icon-btn" onClick={wallet.disconnect}
+        <button className="synapse-icon-btn" onClick={() => { signOut(); wallet.disconnect(); }}
           aria-label={t("app.disconnect_wallet")} title={t("app.disconnect_wallet")}>
           <svg width="16" height="16" fill="none" viewBox="0 0 18 18" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M7 3H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3M12 13l4-4-4-4M16 9H7"/>
@@ -461,7 +492,7 @@ export default function App() {
     wallet.error && (
       <p id="wallet-error" role="alert" className="synapse-wallet-error">
         {wallet.error}
-        {/not found/i.test(wallet.error) && (
+        {wallet.errorCode === FREIGHTER_NOT_FOUND_CODE && (
           <> <a href={FREIGHTER_INSTALL_URL} target="_blank" rel="noopener noreferrer">{t("app.install_freighter")} ↗</a></>
         )}
       </p>
@@ -619,7 +650,7 @@ export default function App() {
             <Suspense fallback={<LazyFallback label={t("app.loading")} />}>
               <PurchasesDashboard initialWallet={wallet.address ?? ""}
                 connectedWallet={wallet.status === "connected" ? wallet.address : null}
-                resourceTitles={resourceTitlesRef.current} />
+                resourceTitles={resourceTitles} />
             </Suspense>
           )}
           {tab === "agent" && (
@@ -658,6 +689,7 @@ export default function App() {
             recipient={activeModal.resource.walletAddress} accessUrl={activeModal.resource.accessUrl}
             walletAddress={wallet.status === "connected" ? wallet.address : null}
             onConnect={() => void wallet.connect()} connecting={walletBusy} walletError={wallet.error}
+            walletErrorCode={wallet.errorCode}
             onClose={closeModal} onCopyUrl={handleCopyUrl} />
         </Suspense>
       )}
@@ -670,7 +702,8 @@ export default function App() {
       )}
       {activeModal?.kind === "transferOwnership" && (
         <Suspense fallback={<LazyModalFallback />}>
-          <TransferOwnershipModal resourceId={activeModal.resource.id} apiKey={sessionToken ?? ""}
+          <TransferOwnershipModal resourceId={activeModal.resource.id} resourceTitle={activeModal.resource.title}
+            apiKey={sessionToken ?? ""}
             onClose={closeModal}
             onConfirmed={(addr) => { applyOverride(activeModal.resource.id, { walletAddress: addr }); closeModal(); }} />
         </Suspense>
@@ -692,6 +725,7 @@ export default function App() {
       {toast && (
         <Toast message={toast.message} fallbackUrl={toast.fallbackUrl} onDismiss={dismissToast} />
       )}
+      <ServiceWorkerUpdatePrompt />
     </div>
   );
 }

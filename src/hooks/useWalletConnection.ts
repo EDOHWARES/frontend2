@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { FREIGHTER_INSTALL_URL, freighterErrorMessage, loadFreighter } from "../lib/freighter.js";
+import {
+  FREIGHTER_INSTALL_URL,
+  FREIGHTER_NOT_FOUND_CODE,
+  freighterErrorMessage,
+  isFreighterNotFoundError,
+  loadFreighter,
+  type WalletErrorCode,
+} from "../lib/freighter.js";
 
 export type WalletStatus = "restoring" | "disconnected" | "connecting" | "connected" | "error";
 
@@ -7,7 +14,8 @@ export interface WalletState {
   status: WalletStatus;
   address: string | null;
   error: string | null;
-  connect: () => Promise<void>;
+  errorCode: WalletErrorCode | null;
+  connect: () => Promise<string | null>;
   disconnect: () => void;
 }
 
@@ -44,6 +52,7 @@ export function useWalletConnection(): WalletState {
   const [status, setStatus] = useState<WalletStatus>(() => (readStored() ? "restoring" : "disconnected"));
   const [address, setAddress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<WalletErrorCode | null>(null);
 
   // ── Restore on mount ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -54,21 +63,30 @@ export function useWalletConnection(): WalletState {
     (async () => {
       try {
         const freighter = await loadFreighter();
-        const [{ isConnected }, { isAllowed }] = await Promise.all([
+        const [connected, allowed] = await Promise.all([
           freighter.isConnected(),
           freighter.isAllowed(),
         ]);
-        if (!isConnected || !isAllowed) throw new Error("not allowed");
+        if (cancelled) return;
+        // Freighter reported an error: treat as transient and keep the stored address.
+        if (connected.error || allowed.error) throw new Error("freighter error");
+
+        if (!connected.isConnected || !allowed.isAllowed) {
+          // Freighter explicitly says this site is not connected or not allowed.
+          writeStored(null);
+          setStatus("disconnected");
+          return;
+        }
 
         const result = await freighter.getAddress();
-        if (result.error || !result.address) throw new Error("no address");
         if (cancelled) return;
+        if (result.error || !result.address) throw new Error("no address");
         writeStored(result.address);
         setAddress(result.address);
         setStatus("connected");
       } catch {
+        // Transient failure (extension or network glitch): keep the stored address so a reload can retry.
         if (cancelled) return;
-        writeStored(null);
         setStatus("disconnected");
       }
     })();
@@ -78,9 +96,39 @@ export function useWalletConnection(): WalletState {
     };
   }, []);
 
+  // ── Account switches ──────────────────────────────────────────────────────
+  // Freighter has no account-change event here, so re-read the active account
+  // whenever the window regains focus (the user usually switches in the extension).
+  useEffect(() => {
+    if (status !== "connected") return;
+
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const freighter = await loadFreighter();
+        const result = await freighter.getAddress();
+        // Transient errors keep the current address; a real account is adopted.
+        if (cancelled || result.error || !result.address) return;
+        if (result.address !== address) {
+          writeStored(result.address);
+          setAddress(result.address);
+        }
+      } catch {
+        // Ignore: the next focus or the signing check will re-read the account.
+      }
+    };
+
+    window.addEventListener("focus", refresh);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", refresh);
+    };
+  }, [status, address]);
+
   // ── Connect ───────────────────────────────────────────────────────────────
   const connect = useCallback(async () => {
     setError(null);
+    setErrorCode(null);
     setStatus("connecting");
 
     try {
@@ -91,8 +139,9 @@ export function useWalletConnection(): WalletState {
         setError(
           `Freighter wallet not found. Install the Freighter browser extension from ${FREIGHTER_INSTALL_URL}, then reload this page.`,
         );
+        setErrorCode(FREIGHTER_NOT_FOUND_CODE);
         setStatus("error");
-        return;
+        return null;
       }
 
       // Opens Freighter's "connect to this site" prompt if not yet allowed.
@@ -104,13 +153,15 @@ export function useWalletConnection(): WalletState {
             "Connection was not approved. Open Freighter, unlock it, and approve the request.",
           ),
         );
+        setErrorCode(null);
         setStatus("error");
-        return;
+        return null;
       }
 
       writeStored(access.address);
       setAddress(access.address);
       setStatus("connected");
+      return access.address;
     } catch (err) {
       setError(
         freighterErrorMessage(
@@ -118,7 +169,9 @@ export function useWalletConnection(): WalletState {
           "Failed to connect wallet. Make sure Freighter is installed and unlocked, then try again.",
         ),
       );
+      setErrorCode(isFreighterNotFoundError(err) ? FREIGHTER_NOT_FOUND_CODE : null);
       setStatus("error");
+      return null;
     }
   }, []);
 
@@ -128,7 +181,8 @@ export function useWalletConnection(): WalletState {
     setAddress(null);
     setStatus("disconnected");
     setError(null);
+    setErrorCode(null);
   }, []);
 
-  return { status, address, error, connect, disconnect };
+  return { status, address, error, errorCode, connect, disconnect };
 }

@@ -19,15 +19,18 @@ jobs:
     name: Lint, Typecheck & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Audit dependencies
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Lint
         run: npm run lint
@@ -43,9 +46,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -55,7 +58,7 @@ jobs:
 
       - name: Build
         env:
-          VITE_API_URL: ${{ secrets.VITE_API_URL || 'http://localhost:3000' }}
+          VITE_API_URL: ${{ secrets.VITE_API_URL || '/api' }}
           VITE_NETWORK: testnet
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN || '' }}
         run: npm run build
@@ -67,7 +70,7 @@ jobs:
         run: node scripts/scan-secrets.mjs
 
       - name: Upload dist artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -78,14 +81,14 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build image
         run: docker build -t synapsvault-frontend:ci .
 
       - name: Serve and health-check
         run: |
-          docker run -d --name web -p 8080:80 synapsvault-frontend:ci
+          docker run -d --name web -p 8080:8080 synapsvault-frontend:ci
           for i in $(seq 1 15); do
             if curl -fsS http://localhost:8080/health; then break; fi
             sleep 1

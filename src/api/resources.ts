@@ -1,5 +1,7 @@
 import { apiFetch, getJson, isArray, readJson } from "./http.js";
 
+const encodePathSegment = encodeURIComponent;
+
 export interface Resource {
   id: string;
   title: string;
@@ -53,10 +55,10 @@ export interface ResourceMeta {
 }
 
 export async function fetchResourceMeta(id: string, signal?: AbortSignal): Promise<ResourceMeta> {
-  return getJson<ResourceMeta>(`/resources/${id}/meta`, "Failed to load resource preview", { signal });
+  return getJson<ResourceMeta>(`/resources/${encodePathSegment(id)}/meta`, "Failed to load resource preview", { signal });
 }
 
-export async function fetchCatalog(filters?: CatalogFilters): Promise<unknown[]> {
+export async function fetchCatalog(filters?: CatalogFilters, signal?: AbortSignal): Promise<unknown[]> {
   const params = new URLSearchParams();
   if (filters?.search) params.set("search", filters.search);
   if (filters?.minPrice) params.set("minPrice", filters.minPrice);
@@ -67,7 +69,12 @@ export async function fetchCatalog(filters?: CatalogFilters): Promise<unknown[]>
     params.set("resourceType", filters.resourceType);
 
   const qs = params.toString();
-  return getJson<unknown[]>(`/resources${qs ? `?${qs}` : ""}`, "Couldn't load the catalog", undefined, isArray);
+  return getJson<unknown[]>(
+    `/resources${qs ? `?${qs}` : ""}`,
+    "Couldn't load the catalog",
+    { signal },
+    isArray,
+  );
 }
 
 /** Resources owned by the API key holder. Callers supply the row shape. */
@@ -79,6 +86,7 @@ export async function fetchMyResources<T = unknown>(apiKey: string): Promise<T[]
 export async function prepareRegisterTx(
   resourceId: string,
   apiKey: string,
+  idempotencyKey?: string,
 ): Promise<{
   unsignedXdr: string;
   networkPassphrase: string;
@@ -90,7 +98,7 @@ export async function prepareRegisterTx(
     description?: string;
   };
 }> {
-  const res = await signedFetch(`/resources/${resourceId}/register/prepare`, apiKey, { method: "GET" });
+  const res = await signedFetch(`/resources/${encodePathSegment(resourceId)}/register/prepare`, apiKey, { method: "GET", headers: withIdempotencyKey({}, idempotencyKey) });
   return readJson(res, "Failed to prepare register transaction");
 }
 
@@ -131,9 +139,9 @@ export async function submitRegisterTx(
   idempotencyKey?: string,
 ): Promise<{ id: string; onchainStatus: string; txHash: string }> {
   const body = JSON.stringify({ signedXdr });
-  const res = await signedFetch(`/resources/${resourceId}/register`, apiKey, {
+  const res = await signedFetch(`/resources/${encodePathSegment(resourceId)}/register`, apiKey, {
     method: "POST",
-    headers: withIdempotencyKey({}, idempotencyKey),
+    headers: withIdempotencyKey({ "Content-Type": "application/json" }, idempotencyKey),
     body,
   });
   if (!res.ok && (res.headers.get("content-type") ?? "").includes("application/json")) {
@@ -158,9 +166,9 @@ export async function prepareSetPrice(
   idempotencyKey?: string,
 ): Promise<{ unsignedXdr: string; networkPassphrase: string }> {
   const body = JSON.stringify({ price });
-  const res = await signedFetch(`/resources/${resourceId}/price/prepare`, apiKey, {
+  const res = await signedFetch(`/resources/${encodePathSegment(resourceId)}/price/prepare`, apiKey, {
     method: "POST",
-    headers: withIdempotencyKey({}, idempotencyKey),
+    headers: withIdempotencyKey({ "Content-Type": "application/json" }, idempotencyKey),
     body,
   });
   return readJson(res, "Failed to prepare transaction");
@@ -185,9 +193,9 @@ export async function prepareTransferOwnership(
   idempotencyKey?: string,
 ): Promise<{ unsignedXdr: string; networkPassphrase: string }> {
   const body = JSON.stringify({ newCreator });
-  const res = await signedFetch(`/resources/${resourceId}/ownership/prepare`, apiKey, {
+  const res = await signedFetch(`/resources/${encodePathSegment(resourceId)}/ownership/prepare`, apiKey, {
     method: "POST",
-    headers: withIdempotencyKey({}, idempotencyKey),
+    headers: withIdempotencyKey({ "Content-Type": "application/json" }, idempotencyKey),
     body,
   });
   return readJson(res, "Failed to prepare transfer transaction");
@@ -201,9 +209,9 @@ export async function submitTransferOwnership(
   idempotencyKey?: string,
 ): Promise<{ id: string; newCreator: string; status: string }> {
   const body = JSON.stringify({ signedXdr, newCreator });
-  const res = await signedFetch(`/resources/${resourceId}/ownership`, apiKey, {
+  const res = await signedFetch(`/resources/${encodePathSegment(resourceId)}/ownership`, apiKey, {
     method: "POST",
-    headers: withIdempotencyKey({}, idempotencyKey),
+    headers: withIdempotencyKey({ "Content-Type": "application/json" }, idempotencyKey),
     body,
   });
   return readJson(res, "Failed to submit transfer transaction");
@@ -272,11 +280,10 @@ export async function submitSetPrice(
   idempotencyKey?: string,
 ): Promise<{ id: string; price: string; status: string }> {
   const body = JSON.stringify({ signedXdr, price });
-  const res = await signedFetch(`/resources/${resourceId}/price`, apiKey, {
+  const res = await signedFetch(`/resources/${encodePathSegment(resourceId)}/price`, apiKey, {
     method: "POST",
-    headers: withIdempotencyKey({}, idempotencyKey),
+    headers: withIdempotencyKey({ "Content-Type": "application/json" }, idempotencyKey),
     body,
   });
-  const res = await signedFetch(`/resources/${encodePathSegment(resourceId)}/price`, apiKey, { method: "POST", body });
   return readJson(res, "Failed to submit transaction");
 }

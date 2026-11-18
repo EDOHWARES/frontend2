@@ -1,5 +1,7 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { publishLinkResource, publishFileResource } from "../api/resources.js";
+import { useDialogA11y } from "../hooks/useDialogA11y.js";
 
 interface Props {
   apiKey: string;
@@ -21,6 +23,7 @@ export function isValidHttpUrl(value: string): boolean {
 }
 
 export function PublishModal({ apiKey, onClose, onPublished }: Props) {
+  const { t } = useTranslation();
   const [publishType, setPublishType] = useState<PublishType>("link");
   const [step, setStep] = useState<Step>("form");
   const [errorMsg, setErrorMsg] = useState("");
@@ -35,12 +38,17 @@ export function PublishModal({ apiKey, onClose, onPublished }: Props) {
     e.preventDefault();
     setErrorMsg("");
 
+    if (!title.trim() || !/^\d+(\.\d{1,7})?$/.test(price) || Number(price) <= 0) {
+      setErrorMsg("Enter a title and a positive price with up to 7 decimal places.");
+      setStep("error");
+      return;
+    }
     const idempotencyKey =
       typeof crypto !== "undefined" && "randomUUID" in crypto
         ? crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     if (publishType === "link" && !isValidHttpUrl(externalUrl)) {
-      setErrorMsg("Please enter a valid URL starting with http:// or https://.");
+      setErrorMsg(t("publish.invalid_url"));
       setStep("error");
       return;
     }
@@ -52,16 +60,17 @@ export function PublishModal({ apiKey, onClose, onPublished }: Props) {
         await publishLinkResource(
           { title, description: description || undefined, price, externalUrl },
           apiKey,
+          undefined,
           idempotencyKey,
         );
       } else {
-        if (!file) throw new Error("Please select a file to upload before publishing.");
+        if (!file) throw new Error(t("publish.file_required"));
         const formData = new FormData();
         formData.append("title", title);
         if (description) formData.append("description", description);
         formData.append("price", price);
         formData.append("file", file);
-        await publishFileResource(formData, apiKey, idempotencyKey);
+        await publishFileResource(formData, apiKey, undefined, idempotencyKey);
       }
       setStep("success");
       onPublished();
@@ -69,7 +78,7 @@ export function PublishModal({ apiKey, onClose, onPublished }: Props) {
       setErrorMsg(
         err instanceof Error
           ? err.message
-          : "Could not publish your resource. Check your connection and try again.",
+          : t("publish.generic_error"),
       );
       setStep("error");
     }
@@ -77,7 +86,7 @@ export function PublishModal({ apiKey, onClose, onPublished }: Props) {
 
   if (step === "success") {
     return (
-      <Overlay onClose={onClose}>
+      <Overlay onClose={onClose} labelledBy="publish-success-title">
         <div className="text-center">
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-success-soft">
             <svg
@@ -90,16 +99,17 @@ export function PublishModal({ apiKey, onClose, onPublished }: Props) {
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
             </svg>
           </div>
-          <h3 className="text-lg font-semibold text-fg">Published!</h3>
+          <h3 id="publish-success-title" className="text-lg font-semibold text-fg">
+            {t("publish.success_title")}
+          </h3>
           <p className="mt-2 text-sm text-fg-muted">
-            Your resource has been submitted for verification. Once verified, you can register it
-            on-chain.
+            {t("publish.success_description")}
           </p>
           <button
             onClick={onClose}
             className="mt-6 rounded-lg bg-accent px-6 py-2 text-sm font-medium text-white hover:bg-accent-hover"
           >
-            Done
+            {t("publish.done")}
           </button>
         </div>
       </Overlay>
@@ -107,44 +117,44 @@ export function PublishModal({ apiKey, onClose, onPublished }: Props) {
   }
 
   return (
-    <Overlay onClose={onClose}>
-      <h2 className="mb-4 text-lg font-semibold text-fg">
-        Publish a Resource
+    <Overlay onClose={onClose} labelledBy="publish-title" canClose={() => step !== "submitting"}>
+      <h2 id="publish-title" className="mb-4 text-lg font-semibold text-fg">
+        {t("publish.title")}
       </h2>
 
       {/* Type toggle */}
       <div className="mb-4 flex gap-2">
         <TypeButton active={publishType === "link"} onClick={() => setPublishType("link")}>
-          Link
+          {t("publish.link")}
         </TypeButton>
         <TypeButton active={publishType === "file"} onClick={() => setPublishType("file")}>
-          File Upload
+          {t("publish.file_upload")}
         </TypeButton>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <Field label="Title" required>
+      <form noValidate onSubmit={handleSubmit} className="space-y-4">
+        <Field label={t("publish.title_field")} required>
           <input
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             required
             className="synapse-input"
-            placeholder="My Dataset"
+            placeholder={t("publish.title_placeholder")}
           />
         </Field>
 
-        <Field label="Description">
+        <Field label={t("publish.description_field")}>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={2}
             className="synapse-input"
-            placeholder="Optional description"
+            placeholder={t("publish.description_placeholder")}
           />
         </Field>
 
-        <Field label="Price (USDC)" required>
+        <Field label={t("publish.price_field")} required>
           <input
             type="text"
             value={price}
@@ -152,23 +162,23 @@ export function PublishModal({ apiKey, onClose, onPublished }: Props) {
             required
             pattern="^\d+(\.\d+)?$"
             className="synapse-input"
-            placeholder="0.50"
+            placeholder={t("publish.price_placeholder")}
           />
         </Field>
 
         {publishType === "link" ? (
-          <Field label="External URL" required>
+          <Field label={t("publish.external_url_field")} required>
             <input
               type="url"
               value={externalUrl}
               onChange={(e) => setExternalUrl(e.target.value)}
               required
               className="synapse-input"
-              placeholder="https://example.com/data.csv"
+              placeholder={t("publish.external_url_placeholder")}
             />
           </Field>
         ) : (
-          <Field label="File" required>
+          <Field label={t("publish.file_field")} required>
             <input
               type="file"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
@@ -186,7 +196,7 @@ export function PublishModal({ apiKey, onClose, onPublished }: Props) {
               onClick={() => setStep("form")}
               className="font-medium underline hover:no-underline"
             >
-              Try again
+              {t("publish.try_again")}
             </button>
           </div>
         )}
@@ -197,14 +207,14 @@ export function PublishModal({ apiKey, onClose, onPublished }: Props) {
             onClick={onClose}
             className="w-full rounded-lg border border-line-strong px-4 py-3 text-sm font-medium text-fg hover:bg-surface-hover sm:w-auto sm:py-2"
           >
-            Cancel
+            {t("publish.cancel")}
           </button>
           <button
             type="submit"
             disabled={step === "submitting"}
             className="w-full rounded-lg bg-accent px-4 py-3 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50 sm:w-auto sm:py-2"
           >
-            {step === "submitting" ? "Publishing..." : "Publish"}
+            {step === "submitting" ? t("publish.submitting") : t("publish.submit")}
           </button>
         </div>
       </form>
@@ -212,17 +222,36 @@ export function PublishModal({ apiKey, onClose, onPublished }: Props) {
   );
 }
 
-function Overlay({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+function Overlay({
+  children,
+  onClose,
+  labelledBy,
+  canClose,
+}: {
+  children: React.ReactNode;
+  onClose: () => void;
+  labelledBy: string;
+  canClose?: () => boolean;
+}) {
+  const { t } = useTranslation();
+  const dialogRef = useDialogA11y<HTMLDivElement>({ onClose, canClose });
+
   return (
     <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/50 p-0 sm:items-center sm:p-4">
       <div
-        className="relative w-full max-w-none overflow-y-auto rounded-none bg-surface-raised p-4 shadow-xl sm:max-w-lg sm:rounded-2xl sm:p-6"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={labelledBy}
+        tabIndex={-1}
+        className="relative w-full max-w-none overflow-y-auto rounded-none bg-surface-raised p-4 shadow-xl outline-none sm:max-w-lg sm:rounded-2xl sm:p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <button
-          onClick={onClose}
+          type="button"
+          onClick={() => { if (!canClose || canClose()) onClose(); }}
           className="absolute right-4 top-4 text-fg-subtle hover:text-fg"
-          aria-label="Close"
+          aria-label={t("publish.close")}
         >
           <svg
             className="h-5 w-5"
