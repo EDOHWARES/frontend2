@@ -50,12 +50,13 @@ function unreachable(status?: number): ApiError {
 }
 
 function misconfigured(status: number): ApiError {
-  return new ApiError(
+  const detail =
     `The API returned a web page instead of data — requests are going to ${describeApiTarget()}. ` +
-      "Set VITE_API_URL to your SynapsVault backend URL and rebuild.",
-    "misconfigured",
-    status,
-  );
+    "Set VITE_API_URL to your SynapsVault backend URL and rebuild.";
+  if (import.meta.env.DEV) return new ApiError(detail, "misconfigured", status);
+  // Operator guidance belongs in the console, not in front of end users.
+  console.error(detail);
+  return new ApiError("The SynapsVault service is temporarily unavailable. Please try again later.", "misconfigured", status);
 }
 
 /** Build a full API URL from a path like "/resources". */
@@ -94,18 +95,35 @@ function withAuth(init?: RequestInit): RequestInit | undefined {
   return { ...init, headers };
 }
 
+/** How long a request may wait for a response before it is treated as unreachable. */
+export const REQUEST_TIMEOUT_MS = 15_000;
+
 /**
- * fetch() that turns network failures (backend down, DNS, CORS) into an
- * "unreachable" ApiError. Abort errors are rethrown untouched so callers can
- * ignore them.
+ * fetch() that turns network failures (backend down, DNS, CORS) and requests
+ * that exceed REQUEST_TIMEOUT_MS into an "unreachable" ApiError, so the UI's
+ * retry path applies. Caller-initiated abort errors are rethrown untouched so
+ * callers can ignore them.
  */
 export async function networkFetch(url: string, init?: RequestInit): Promise<Response> {
   // `init` (including any signed request body) is forwarded to fetch unchanged.
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, REQUEST_TIMEOUT_MS);
+  const callerSignal = init?.signal;
+  const forwardAbort = () => controller.abort();
+  if (callerSignal?.aborted) controller.abort();
+  else callerSignal?.addEventListener("abort", forwardAbort);
   try {
-    return await fetch(url, init);
+    return await fetch(url, { ...init, signal: controller.signal });
   } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") throw err;
+    if (err instanceof DOMException && err.name === "AbortError" && !timedOut) throw err;
     throw unreachable();
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener("abort", forwardAbort);
   }
 }
 
@@ -145,14 +163,17 @@ async function readErrorMessage(res: Response): Promise<string | undefined> {
  * `fallback` is used when the backend gives no error message of its own.
  */
 export async function ensureOk(res: Response, fallback: string): Promise<void> {
+  if (UNREACHABLE_STATUSES.has(res.status)) throw unreachable(res.status);
   if (isHtml(res)) throw misconfigured(res.status);
   if (res.ok) return;
-  // Gateway errors mean the backend itself didn't answer.
-  if (UNREACHABLE_STATUSES.has(res.status)) throw unreachable(res.status);
+  if (res.status === 500 && res.headers.get("content-type")?.includes("text/plain")) {
+    const detail = await res.clone().text();
+    if (detail.includes("FUNCTION_INVOCATION_FAILED")) {
+      console.error("SynapsVault backend crashed: Vercel FUNCTION_INVOCATION_FAILED. Inspect backend function logs.");
+      throw new ApiError("The SynapsVault API encountered a server error. Please try again later.", "http", 500);
+    }
+  }
   const message = await readErrorMessage(res);
-  // The backend always sends a JSON body with its 500s; a bare one comes
-  // from a proxy in front of it.
-  if (!message && res.status === 500) throw unreachable(res.status);
   throw new ApiError(message ?? `${fallback} (HTTP ${res.status})`, "http", res.status);
 }
 
@@ -174,6 +195,7 @@ export const hasKeys =
  */
 export async function readJson<T>(res: Response, fallback: string, isValid?: Validator): Promise<T> {
   await ensureOk(res, fallback);
+  if (res.status === 204) return undefined as T;
   let body: unknown;
   try {
     body = await res.json();

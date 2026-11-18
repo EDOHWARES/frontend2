@@ -14,24 +14,7 @@ const API_PROXY_PATTERN = "^/(resources|agent|registry|publishers|buyers|payment
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const apiBase = env.VITE_API_URL ?? "";
   const devProxyTarget = env.VITE_DEV_PROXY_TARGET || "http://localhost:3000";
-
-  // Generate catalog URL pattern for service worker caching
-  // Matches API origin to ensure cache only works for configured backend
-  let catalogUrlPattern: RegExp;
-  try {
-    if (apiBase) {
-      const apiOrigin = new URL(apiBase).origin;
-      catalogUrlPattern = new RegExp(
-        `^${apiOrigin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/resources`,
-      );
-    } else {
-      catalogUrlPattern = /^\/resources/;
-    }
-  } catch {
-    catalogUrlPattern = /^\/resources/;
-  }
 
   return {
     // Build configuration
@@ -41,18 +24,24 @@ export default defineConfig(({ mode }) => {
       // Warn if chunks exceed 800KB (gzipped)
       chunkSizeWarningLimit: 800,
       // Generate source maps for production debugging
-      sourcemap: true,
+      sourcemap: false, // no public source maps; upload to Sentry if stack traces are needed
       // Optimize for production
       minify: "terser",
       terserOptions: {
         compress: {
-          drop_console: true, // Remove console logs in production
+          // Keep console.error as the last-resort signal when Sentry itself
+          // cannot initialize. Remove routine diagnostic output only.
+          drop_console: false,
+          pure_funcs: ["console.log", "console.info", "console.debug", "console.warn"],
         },
       },
       // Split vendor libraries into separate, cache-friendly chunks
       rollupOptions: {
         output: {
           manualChunks(id) {
+            // Keep Vite's shared dynamic-import helper out of the wallet chunk;
+            // otherwise the entry imports the whole Stellar SDK just to preload.
+            if (id.includes("vite/preload-helper")) return "preload-helper";
             if (!id.includes("node_modules")) {
               return undefined;
             }
@@ -93,7 +82,9 @@ export default defineConfig(({ mode }) => {
 
       // Progressive Web App support
       VitePWA({
-        registerType: "autoUpdate",
+        // A waiting worker must not reload an active purchase or form flow.
+        registerType: "prompt",
+        injectRegister: false,
         includeAssets: ["icon.svg"],
         manifest: {
           name: "SynapsVault",
@@ -118,13 +109,19 @@ export default defineConfig(({ mode }) => {
           globPatterns: ["**/*.{js,css,html,ico,svg,woff2}"],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
           navigateFallback: "index.html",
+          navigateFallbackDenylist: [/^\/(api|resources|agent|registry|publishers|buyers|payments)(\/|$)/],
           cleanupOutdatedCaches: true,
-          clientsClaim: true,
-          skipWaiting: true,
+          clientsClaim: false,
+          skipWaiting: false,
           runtimeCaching: [
-            // Cache catalog API responses
+            // Cache public catalog API responses only (never key-authenticated or signed GETs)
             {
-              urlPattern: catalogUrlPattern,
+              urlPattern: ({ url, request }) =>
+                url.origin === self.location.origin &&
+                /^\/(?:api\/)?resources\/?$/.test(url.pathname) &&
+                !request.headers.has("x-api-key") &&
+                !request.headers.has("authorization") &&
+                !request.headers.has("x-signature"),
               handler: "NetworkFirst",
               options: {
                 cacheName: "synapsvault-catalog",
@@ -134,7 +131,7 @@ export default defineConfig(({ mode }) => {
                   maxAgeSeconds: 60 * 60 * 24, // 24 hours
                 },
                 cacheableResponse: {
-                  statuses: [0, 200],
+                  statuses: [200],
                 },
               },
             },

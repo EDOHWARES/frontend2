@@ -1,12 +1,18 @@
+import { Keypair } from "@stellar/stellar-sdk";
+const recipient = Keypair.random().publicKey();
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TransferOwnershipModal } from "./TransferOwnershipModal.js";
 import { useTransferOwnership } from "../hooks/useTransferOwnership.js";
+import "../i18n/config.js";
 
 vi.mock("../hooks/useTransferOwnership.js", () => ({
   useTransferOwnership: vi.fn(),
 }));
+
+const renderWithI18n = (ui: React.ReactElement) =>
+  render(<>{ui}</>);
 
 describe("TransferOwnershipModal", () => {
   const onClose = vi.fn();
@@ -25,9 +31,9 @@ describe("TransferOwnershipModal", () => {
   });
 
   it("renders with labeled owner address input", () => {
-    render(
+    renderWithI18n(
       <TransferOwnershipModal
-        resourceId="res-1"
+        resourceId="res-1" resourceTitle="Test resource"
         apiKey="key-1"
         onClose={onClose}
         onConfirmed={onConfirmed}
@@ -36,24 +42,26 @@ describe("TransferOwnershipModal", () => {
 
     expect(screen.getByRole("heading", { name: /transfer ownership/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/new owner address/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^transfer$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /review transfer/i })).toBeDisabled();
   });
 
   it("submits new owner on happy path", async () => {
     const user = userEvent.setup();
-    render(
+    renderWithI18n(
       <TransferOwnershipModal
-        resourceId="res-1"
+        resourceId="res-1" resourceTitle="Test resource"
         apiKey="key-1"
         onClose={onClose}
         onConfirmed={onConfirmed}
       />,
     );
 
-    await user.type(screen.getByLabelText(/new owner address/i), "GNEWOWNER123");
-    await user.click(screen.getByRole("button", { name: /^transfer$/i }));
+    await user.type(screen.getByLabelText(/new owner address/i), recipient);
+    await user.click(screen.getByRole("button", { name: /review transfer/i }));
 
-    expect(mockTransfer).toHaveBeenCalledWith("GNEWOWNER123");
+    expect(mockTransfer).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: /confirm transfer/i }));
+    expect(mockTransfer).toHaveBeenCalledWith(recipient);
   });
 
   it("shows in-progress status labels", () => {
@@ -65,16 +73,16 @@ describe("TransferOwnershipModal", () => {
       transferOwnership: mockTransfer,
     });
 
-    render(
+    renderWithI18n(
       <TransferOwnershipModal
-        resourceId="res-1"
+        resourceId="res-1" resourceTitle="Test resource"
         apiKey="key-1"
         onClose={onClose}
         onConfirmed={onConfirmed}
       />,
     );
 
-    expect(screen.getByText(/submitting to stellar/i)).toBeInTheDocument();
+    expect(screen.getByText(/submitting transaction/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /working/i })).toBeDisabled();
   });
 
@@ -87,9 +95,9 @@ describe("TransferOwnershipModal", () => {
       transferOwnership: mockTransfer,
     });
 
-    render(
+    renderWithI18n(
       <TransferOwnershipModal
-        resourceId="res-1"
+        resourceId="res-1" resourceTitle="Test resource"
         apiKey="key-1"
         onClose={onClose}
         onConfirmed={onConfirmed}
@@ -102,15 +110,15 @@ describe("TransferOwnershipModal", () => {
   it("calls onConfirmed when transfer succeeds", async () => {
     vi.mocked(useTransferOwnership).mockReturnValue({
       status: "confirmed",
-      newOwner: "GNEWOWNER123",
+      newOwner: recipient,
       error: null,
       networkWarning: null,
       transferOwnership: mockTransfer,
     });
 
-    render(
+    renderWithI18n(
       <TransferOwnershipModal
-        resourceId="res-1"
+        resourceId="res-1" resourceTitle="Test resource"
         apiKey="key-1"
         onClose={onClose}
         onConfirmed={onConfirmed}
@@ -118,16 +126,16 @@ describe("TransferOwnershipModal", () => {
     );
 
     await waitFor(() => {
-      expect(onConfirmed).toHaveBeenCalledWith("GNEWOWNER123");
+      expect(onConfirmed).toHaveBeenCalledWith(recipient);
     });
-    expect(screen.getByText(/ownership transferred to gnewowner123/i)).toBeInTheDocument();
+    expect(screen.getByText(`Ownership transferred to ${recipient}`)).toBeInTheDocument();
   });
 
   it("closes when cancel is clicked", async () => {
     const user = userEvent.setup();
-    render(
+    renderWithI18n(
       <TransferOwnershipModal
-        resourceId="res-1"
+        resourceId="res-1" resourceTitle="Test resource"
         apiKey="key-1"
         onClose={onClose}
         onConfirmed={onConfirmed}
