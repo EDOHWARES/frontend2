@@ -86,6 +86,83 @@ npm run test:ui       # Visual UI for test runner
 
 Tests use Vitest + React Testing Library. Focus on user behavior, not implementation details.
 
+### Test setup and automatic cleanup
+
+`src/test/setup.ts` runs before every test file (configured in `vite.config.ts` via `setupFiles`). It does two things automatically so individual tests do not have to.
+
+**React Testing Library cleanup**
+
+After each test, `cleanup()` from `@testing-library/react` unmounts every component tree that was rendered during that test and removes its DOM nodes. This is registered with Vitest's `afterEach`:
+
+```ts
+afterEach(() => {
+  cleanup();
+});
+```
+
+Without this, rendered components would accumulate across tests in the same file, causing false query matches, event-listener leaks, and unpredictable failures.
+
+**jsdom environment shims**
+
+jsdom does not implement every browser API. The setup file patches two gaps that several hooks depend on:
+
+| Shim | Why it is needed |
+|------|-----------------|
+| `window.matchMedia` | `useTheme()` calls `window.matchMedia('(prefers-color-scheme: dark)')` unconditionally on mount. jsdom leaves this undefined, throwing a `TypeError`. The shim returns a minimal object (`matches: false`, no-op `addEventListener`/`removeEventListener`). |
+| `globalThis.localStorage` | `useTheme()` and `useWalletConnection()` read and write `localStorage` on mount. Some jsdom configurations leave it undefined. The shim provides a `Map`-backed in-memory `Storage` object. |
+
+The shims apply globally for the entire test run, so you do not need to mock either API in individual test files.
+
+**Restoring test-specific mocks**
+
+When a test overrides a global or module export with `vi.spyOn` or `vi.fn()`, restore it after the test so it does not affect others. The simplest approach is `vi.restoreAllMocks()` in an `afterEach`:
+
+```ts
+import { afterEach, vi } from "vitest";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+```
+
+Alternatively, pass `restoreMocks: true` in the Vitest config to restore every spy automatically. If you only need to reset call counts and return values without removing the spy, use `vi.clearAllMocks()` instead.
+
+**Example: overriding `localStorage` for one test**
+
+The global shim covers the happy path. When you need to test error handling or a specific stored value, replace the shim locally and restore it afterwards:
+
+```ts
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { ThemeToggle } from "./ThemeToggle";
+
+describe("ThemeToggle", () => {
+  let getItemSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    getItemSpy = vi.spyOn(globalThis.localStorage, "getItem");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks(); // removes the spy, restores the shim's original getItem
+  });
+
+  it("defaults to light theme when nothing is stored", () => {
+    getItemSpy.mockReturnValue(null);
+    render(<ThemeToggle />);
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("restores dark theme from storage", () => {
+    getItemSpy.mockReturnValue("dark");
+    render(<ThemeToggle />);
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+  });
+});
+```
+
+The `cleanup()` registered in the setup file unmounts the rendered tree after each test, and `vi.restoreAllMocks()` removes the `getItem` spy, so neither the DOM state nor the mock leaks into the next test.
+
 ## Code Standards
 
 - **TypeScript**: Strict mode, no `any` without comment
