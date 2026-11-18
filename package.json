@@ -16,9 +16,10 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "lint": "eslint .",
+    "i18n:check": "node scripts/check-i18n-parity.mjs",
     "docker:build": "docker build -t synapsvault-frontend:latest .",
     "docker:run": "docker run -p 8080:8080 synapsvault-frontend:latest",
-    "check": "npm run lint && npm run typecheck && npm test && npm run bundle:check && node scripts/scan-secrets.mjs",
+    "check": "npm run lint && npm run typecheck && npm test && npm run bundle:check && node scripts/scan-secrets.mjs && npm run i18n:check",
     "lint:fix": "eslint . --fix"
   },
   "dependencies": {

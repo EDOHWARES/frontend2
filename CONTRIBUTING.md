@@ -38,6 +38,11 @@ For local development, keep `VITE_API_URL` **empty** and point
 API requests to that target, which avoids CORS issues and keeps the browser
 talking to a single origin. See `.env.example` for the full list of variables.
 
+`.env.example` lists only variables the application actually reads. There are
+no debug or verbose-logging flags (`VITE_DEBUG` / `VITE_VERBOSE_LOGGING` were
+removed because nothing in `src/` consumed them). When you add a new `VITE_*`
+variable, add its example entry in the same PR as the code that reads it.
+
 ```bash
 # .env (local development)
 VITE_API_URL=
@@ -208,7 +213,9 @@ every feature-branch commit.
    [Previewing a Production Build](#previewing-a-production-build).
    For details on reviewing auto-fix changes, see [Linting](#linting).
    To understand what the secret scanner checks and how to interpret its
-   output, see [Secret Scanner](#secret-scanner).
+   output, see [Secret Scanner](#secret-scanner). `npm run check` also
+   verifies English/Spanish key parity — see
+   [Translation Key Parity](#translation-key-parity).
 
    CI also enforces a production dependency audit that `npm run check` does not
    include — see [Production Dependency Audit](#production-dependency-audit) to
@@ -410,6 +417,15 @@ Built assets: no recognized private-key patterns found.
 dist/assets/index-Dq3kL8mN.js: possible Stellar private key
 ```
 
+**Missing build output** (scanner run before `npm run build`):
+
+```
+dist/ not found — run `npm run build` before scanning for secrets.
+```
+
+The scanner exits with code 1 in this case rather than reporting a clean
+result, so a skipped build can never look like a passing scan.
+
 The scanner prints only the file path and pattern label — never the matched
 value itself. The process exits with code 1 when any match is found, so it
 blocks CI the same way a failing test does.
@@ -419,6 +435,47 @@ no real credential was accidentally inlined into the bundle. If the match is
 genuinely a non-secret (for example, a base32 string that happens to match the
 Stellar key regex), move the value out of the bundled source or rename it so
 it no longer matches.
+
+## Translation Key Parity
+
+`scripts/check-i18n-parity.mjs` checks that `src/i18n/locales/en.json` and
+`src/i18n/locales/es.json` define exactly the same nested translation keys.
+It flattens each file to leaf paths (for example `nav.home` or
+`editPrice.status.signing`) and compares them, using English as the baseline.
+Translated values are not compared — only the key structure.
+
+```bash
+npm run i18n:check
+```
+
+It also runs as the last step of `npm run check`.
+
+**Clean output:**
+
+```
+Locale keys match (384 keys).
+```
+
+**Mismatch output** (exit code 1):
+
+```
+missing in src/i18n/locales/es.json: common.cancel
+extra in src/i18n/locales/es.json: creator.edit_price_title
+Locale key mismatch: 1 missing, 1 extra.
+```
+
+- **missing** — the key exists in `en.json` but not in `es.json`. Add a
+  Spanish translation at that path.
+- **extra** — the key exists only in `es.json`. Rename it to match the English
+  path, or delete it if the English key was removed.
+
+When you add, rename, or remove a translation key, update both locale files in
+the same PR. To compare other files (for example temporary fixtures while
+testing the script), pass them as arguments:
+
+```bash
+node scripts/check-i18n-parity.mjs path/to/base.json path/to/other.json
+```
 
 ## Linting
 
@@ -463,7 +520,14 @@ npx eslint --fix src/components/ResourceCard.tsx
 ```
 
 The config (`eslint.config.js`) lints `**/*.{ts,tsx}` source files plus
-`*.config.{js,ts}` and `scripts/**/*.{js,mjs}`. Passing a path outside those
+`*.config.{js,ts}` and `scripts/**/*.{js,mjs}`. Maintenance scripts in
+`scripts/` (such as `check-bundle-size.mjs` and `scan-secrets.mjs`) get
+ESLint's recommended JavaScript rules with Node globals, so mistakes like an
+undefined variable (`no-undef`) or an unused binding fail `npm run lint`:
+
+```bash
+npx eslint scripts/
+``` Passing a path outside those
 patterns (for example a plain `.js` file in `src/`) produces no output because
 no rule block matches it — not because the file is error-free.
 
