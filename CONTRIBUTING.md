@@ -16,7 +16,8 @@ npm install
 
 # Configure environment
 cp .env.example .env
-# Edit .env — set VITE_API_URL to your backend (default: http://localhost:3000)
+# Edit .env — leave VITE_API_URL empty for local development and set
+# VITE_DEV_PROXY_TARGET to your backend (e.g. http://localhost:3000)
 
 # Start dev server
 npm run dev
@@ -24,6 +25,23 @@ npm run dev
 ```
 
 Dev server includes hot module reload and TypeScript checking.
+
+### API Environment Variables
+
+For local development, keep `VITE_API_URL` **empty** and point
+`VITE_DEV_PROXY_TARGET` at your backend instead. The Vite dev server proxies
+API requests to that target, which avoids CORS issues and keeps the browser
+talking to a single origin. See `.env.example` for the full list of variables.
+
+```bash
+# .env (local development)
+VITE_API_URL=
+VITE_DEV_PROXY_TARGET=http://localhost:3000
+```
+
+Only set `VITE_API_URL` when the frontend must call a backend directly (for
+example, a deployed environment with a fictional host such as
+`https://api.example.test`).
 
 ## Docker Development
 
@@ -68,6 +86,9 @@ npm run docker:run
    # or simply: npm run check
    ```
 
+   To verify the built output locally, see
+   [Previewing a Production Build](#previewing-a-production-build).
+
 4. **Commit with conventional format (see below)**
 
 5. **Push and create PR to `dev`**
@@ -85,6 +106,41 @@ npm run test:ui       # Visual UI for test runner
 ```
 
 Tests use Vitest + React Testing Library. Focus on user behavior, not implementation details.
+
+### Vitest UI Peer Dependency
+
+`npm run test:ui` requires the Vitest UI peer dependency (`@vitest/ui`), which
+is not installed by default. Install it at the same major version as `vitest`
+in `package.json` (for example, `vitest@^5.0.5`):
+
+```bash
+npm install -D @vitest/ui@^5.0.5
+```
+
+Then run `npm run test:ui` to open the visual test runner.
+
+## Previewing a Production Build
+
+Build the app and serve the generated assets locally:
+
+```bash
+npm run build     # Outputs to dist/
+npm run preview   # Serves the built assets (default: http://localhost:4173)
+```
+
+`npm run preview` serves the files produced by `npm run build` — it does not
+run the dev server, hot module reload, or the dev proxy. Use it to check the
+production bundle before opening a PR.
+
+## Production Build (build:prod)
+
+```bash
+npm run build:prod
+```
+
+This runs the production build with `NODE_ENV=production` and writes the
+generated assets to the `dist/` directory. Deploy or inspect `dist/` after the
+command completes.
 
 ## Code Standards
 
