@@ -5,10 +5,10 @@ export function ServiceWorkerUpdatePrompt() {
   const [activateUpdate, setActivateUpdate] = useState<(() => void) | null>(null);
   const [activating, setActivating] = useState(false);
 
-  useEffect(
-    () => registerAppServiceWorker((activate) => setActivateUpdate(() => activate)),
-    [],
-  );
+  // Wrap the callback so React stores it instead of invoking it.
+  // Passing setActivateUpdate directly would make React treat the function
+  // argument as a state updater and call it, activating the update early.
+  useEffect(() => registerAppServiceWorker((update) => setActivateUpdate(() => update)), []);
 
   const applyUpdate = useCallback(() => {
     if (!activateUpdate) return;

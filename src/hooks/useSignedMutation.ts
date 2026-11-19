@@ -38,6 +38,7 @@ export function useSignedMutation<TParams, TResult>(
   async function execute(params: TParams) {
     setError(null);
     setNetworkWarning(null);
+    setResult(null);
     // One idempotency key per logical operation, reused across prepare/submit retries
     const idempotencyKey = crypto.randomUUID();
 

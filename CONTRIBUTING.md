@@ -256,6 +256,7 @@ More focused guides:
 - [docs/testing-language-effects.md](./docs/testing-language-effects.md): testing `applyLanguageEffects` when `localStorage` throws
 - [docs/tooling-vitest-ui.md](./docs/tooling-vitest-ui.md): making `npm run test:ui` work from a clean install
 - [docs/tooling-bundle-analyzer.md](./docs/tooling-bundle-analyzer.md): opening `stats.html` on any operating system
+- [docs/session-expiry.md](./docs/session-expiry.md): how session tokens are validated, cleared on expiry, and used during wallet sign-in
 
 ### Test setup and automatic cleanup
 
