@@ -243,6 +243,10 @@ npm run test:ui       # Visual UI for test runner
 
 Tests use Vitest + React Testing Library. Focus on user behavior, not implementation details.
 
+Vitest packages are bumped by Dependabot in separate PRs — see
+[Dependabot Updates](#dependabot-updates) for keeping them in step.
+
+### Vitest UI Peer Dependency
 For hooks that schedule timers, use Vitest's fake-timer API instead of real delays.
 See [docs/testing-fake-timers.md](./docs/testing-fake-timers.md) for a worked example with `useDebouncedValue`, including timer cleanup.
 
@@ -257,6 +261,88 @@ More focused guides:
 
 `src/test/setup.ts` runs before every test file (configured in `vite.config.ts` via `setupFiles`). It does two things automatically so individual tests do not have to.
 
+```bash
+npm install -D @vitest/ui@^5.0.5
+```
+
+Then run `npm run test:ui` to open the visual test runner.
+
+## Previewing a Production Build
+
+Build the app and serve the generated assets locally:
+
+```bash
+npm run build     # Outputs to dist/
+npm run preview   # Serves the built assets (default: http://localhost:4173)
+```
+
+`npm run preview` serves the files produced by `npm run build` — it does not
+run the dev server, hot module reload, or the dev proxy. Use it to check the
+production bundle before opening a PR.
+
+## Production Build (build:prod)
+
+```bash
+npm run build:prod
+```
+
+This runs the production build with `NODE_ENV=production` and writes the
+generated assets to the `dist/` directory. Deploy or inspect `dist/` after the
+command completes. CI's `build` job also uploads its own `dist/` output as a
+downloadable artifact — see [CI dist Artifact](#ci-dist-artifact).
+
+### build:prod on Windows
+
+The script is currently defined as:
+
+```json
+"build:prod": "NODE_ENV=production vite build"
+```
+
+The `NODE_ENV=production <command>` prefix is POSIX shell syntax. It works in
+bash, zsh, Git Bash, and WSL, but fails in the default Windows command shell
+(`cmd.exe`) and in PowerShell, which do not support inline environment
+assignment — npm reports that `NODE_ENV` is not recognized as a command.
+
+**Portable alternative.** `vite build` already runs in `production` mode by
+default, so plain `npm run build` emits the same production assets to `dist/`
+on every platform:
+
+```bash
+npm run build
+```
+
+Use `npm run build` on Windows, or run `npm run build:prod` from Git Bash or
+WSL. Either way, check that `dist/` contains hashed, minified assets under
+`dist/assets/`. Do not add a dependency (such as `cross-env`) solely to set
+`NODE_ENV` for this script.
+
+## CI dist Artifact
+
+The `build` job (see [`.github/workflows/ci.yml`](./.github/workflows/ci.yml),
+step `Upload dist artifact`) uploads its build output as a named artifact:
+
+```yaml
+- name: Upload dist artifact
+  uses: actions/upload-artifact@v7
+  with:
+    name: dist
+    path: dist/
+    retention-days: 7
+```
+
+**Where it appears.** Once the run finishes, the `dist` artifact is listed in
+the **Artifacts** section of the workflow run's summary page — open the
+repository's Actions tab, click the CI run, and scroll to "Artifacts". It
+holds the contents of the `dist/` directory produced by `npm run build` in the
+`build` job. Download it as a zip to inspect that exact build without
+rebuilding locally.
+
+**Retention.** `retention-days: 7` keeps the artifact downloadable for seven
+days; GitHub then deletes it automatically. Once it is gone it can't be
+recovered — re-run the workflow or rebuild locally to produce a fresh `dist/`.
+
+## Production Dependency Audit
 **React Testing Library cleanup**
 
 After each test, `cleanup()` from `@testing-library/react` unmounts every component tree that was rendered during that test and removes its DOM nodes. This is registered with Vitest's `afterEach`:
@@ -303,6 +389,34 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ThemeToggle } from "./ThemeToggle";
 
+## CI Job Timeouts
+
+None of the CI jobs (`test`, `build`, `docker` in
+[`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) currently set
+`timeout-minutes`. GitHub Actions therefore applies its platform default of
+**360 minutes (6 hours)** per job.
+
+**What this means in practice.** A stalled command — a hung `npm ci`, a test
+that never resolves, or a container that never becomes healthy — keeps the
+runner busy until the default limit is hit, rather than failing fast. Normal
+runs finish in a few minutes, so a job still running far beyond that is almost
+certainly stuck.
+
+**If a job appears stuck**
+
+1. Open the run in the repository's Actions tab and check the last log line of
+   the running step to see which command stalled.
+2. Click **Cancel workflow** to free the runner — don't wait for the 6-hour
+   limit. (Pushing a new commit to the same branch or PR also cancels it; see
+   [CI Concurrency and Cancelled Runs](#ci-concurrency-and-cancelled-runs).)
+3. Reproduce the stalled step locally (for example `npm test` or the
+   [Local Docker Smoke Checks](#local-docker-smoke-checks)) before re-running.
+
+When adding a timeout to a job, set `timeout-minutes` at the job level (next to
+`runs-on`), choose a value comfortably above the job's typical duration, and
+leave its steps unchanged.
+
+## Secret Scanner
 describe("ThemeToggle", () => {
   let getItemSpy: ReturnType<typeof vi.spyOn>;
 
@@ -340,18 +454,25 @@ Built assets: no recognized private-key patterns found.
 dist/assets/index-Dq3kL8mN.js: possible Stellar private key
 ```
 
-**Missing build output** (scanner run before `npm run build`):
-
-```
-dist/ not found — run `npm run build` before scanning for secrets.
-```
-
-The scanner exits with code 1 in this case rather than reporting a clean
-result, so a skipped build can never look like a passing scan.
-
 The scanner prints only the file path and pattern label — never the matched
 value itself. The process exits with code 1 when any match is found, so it
 blocks CI the same way a failing test does.
+
+### Where the scan runs
+
+The scanner reads `dist/`, so it must always run **after** a build. It is
+currently invoked directly with `node` in two places (there is no dedicated
+npm script for it yet):
+
+| Where | Invocation | Runs after |
+|-------|-----------|------------|
+| `npm run check` (`package.json`) | `... && npm run bundle:check && node scripts/scan-secrets.mjs` | `bundle:check`, which runs `npm run build` |
+| CI `build` job, step `Scan for leaked secrets` | `node scripts/scan-secrets.mjs` | `Build` and `Enforce bundle size budgets` |
+
+In both places a non-zero exit fails the run: `npm run check` stops at the
+`&&` chain, and the CI step fails the `build` job (so the `dist` artifact is
+not uploaded). If you change how the scanner is invoked, update both places
+together and keep it after the build step.
 
 If you get a false positive from a test fixture or generated stub, check that
 no real credential was accidentally inlined into the bundle. If the match is
@@ -359,46 +480,36 @@ genuinely a non-secret (for example, a base32 string that happens to match the
 Stellar key regex), move the value out of the bundled source or rename it so
 it no longer matches.
 
-## Translation Key Parity
+## Dependabot Updates
 
-`scripts/check-i18n-parity.mjs` checks that `src/i18n/locales/en.json` and
-`src/i18n/locales/es.json` define exactly the same nested translation keys.
-It flattens each file to leaf paths (for example `nav.home` or
-`editPrice.status.signing`) and compares them, using English as the baseline.
-Translated values are not compared — only the key structure.
+Dependabot is configured in
+[`.github/dependabot.yml`](./.github/dependabot.yml):
 
-```bash
-npm run i18n:check
-```
+| Ecosystem | Directory | Schedule | Open PR limit |
+|-----------|-----------|----------|---------------|
+| `npm` | `/` | weekly | 5 |
+| `github-actions` | `/` | weekly | default (5) |
 
-It also runs as the last step of `npm run check`.
+No `groups` are defined, so Dependabot opens **one pull request per
+dependency**. Security updates are raised independently of this weekly
+schedule and are not affected by the PR limit.
 
-**Clean output:**
+**Coupled Vitest tooling.** `vitest` and its companion packages — such as
+`@vitest/ui` (needed for `npm run test:ui`, see
+[Vitest UI Peer Dependency](#vitest-ui-peer-dependency)) and any
+`@vitest/coverage-*` provider — must stay on the same version. Because they
+arrive as separate PRs, merging only one of them can leave the toolchain
+mismatched. When reviewing a Vitest-related Dependabot PR:
 
-```
-Locale keys match (384 keys).
-```
+1. Check for sibling PRs bumping other `vitest` / `@vitest/*` packages.
+2. Merge them together (or combine them into one branch) so the versions stay
+   aligned.
+3. Run `npm test` — and `npm run test:ui` if you have `@vitest/ui` installed —
+   before merging.
 
-**Mismatch output** (exit code 1):
-
-```
-missing in src/i18n/locales/es.json: common.cancel
-extra in src/i18n/locales/es.json: creator.edit_price_title
-Locale key mismatch: 1 missing, 1 extra.
-```
-
-- **missing** — the key exists in `en.json` but not in `es.json`. Add a
-  Spanish translation at that path.
-- **extra** — the key exists only in `es.json`. Rename it to match the English
-  path, or delete it if the English key was removed.
-
-When you add, rename, or remove a translation key, update both locale files in
-the same PR. To compare other files (for example temporary fixtures while
-testing the script), pass them as arguments:
-
-```bash
-node scripts/check-i18n-parity.mjs path/to/base.json path/to/other.json
-```
+If you add a `groups` entry to `dependabot.yml`, keep the existing weekly
+schedule and leave unrelated dependencies ungrouped, then validate the YAML
+before committing.
 
 ## Linting
 
@@ -443,14 +554,7 @@ npx eslint --fix src/components/ResourceCard.tsx
 ```
 
 The config (`eslint.config.js`) lints `**/*.{ts,tsx}` source files plus
-`*.config.{js,ts}` and `scripts/**/*.{js,mjs}`. Maintenance scripts in
-`scripts/` (such as `check-bundle-size.mjs` and `scan-secrets.mjs`) get
-ESLint's recommended JavaScript rules with Node globals, so mistakes like an
-undefined variable (`no-undef`) or an unused binding fail `npm run lint`:
-
-```bash
-npx eslint scripts/
-``` Passing a path outside those
+`*.config.{js,ts}` and `scripts/**/*.{js,mjs}`. Passing a path outside those
 patterns (for example a plain `.js` file in `src/`) produces no output because
 no rule block matches it — not because the file is error-free.
 
