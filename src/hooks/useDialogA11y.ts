@@ -4,6 +4,32 @@ import { useEffect, useRef, type RefObject } from "react";
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+/**
+ * Whether an element is effectively disabled, i.e. disabled itself or by an
+ * enclosing `<fieldset disabled>`. Mirrors the browser's first-legend
+ * exception: controls inside the first `<legend>` of a disabled fieldset stay
+ * enabled.
+ */
+function isEffectivelyDisabled(element: HTMLElement): boolean {
+  if (element.matches(":disabled")) return true;
+  // `:disabled` already covers the legend exception in modern browsers, but
+  // fall back to an explicit ancestor walk for engines that do not.
+  let fieldset = element.closest("fieldset[disabled]");
+  while (fieldset) {
+    const firstLegend = fieldset.querySelector(":scope > legend");
+    if (!firstLegend || !firstLegend.contains(element)) return true;
+    fieldset = fieldset.parentElement?.closest("fieldset[disabled]") ?? null;
+  }
+  return false;
+}
+
+/** Focusable controls inside `dialog`, excluding effectively disabled ones. */
+function getFocusable(dialog: HTMLElement): HTMLElement[] {
+  return Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+    (element) => !isEffectivelyDisabled(element),
+  );
+}
+
 export interface UseDialogA11yOptions {
   /** Close callback fired on Escape or backdrop dismissal. */
   onClose: () => void;
@@ -56,7 +82,7 @@ export function useDialogA11y<T extends HTMLElement = HTMLDivElement>({
       }
 
       if (event.key === "Tab" && dialog) {
-        const focusable = dialog.querySelectorAll<HTMLElement>(FOCUSABLE);
+        const focusable = getFocusable(dialog);
         if (focusable.length === 0) {
           event.preventDefault();
           dialog.focus();
