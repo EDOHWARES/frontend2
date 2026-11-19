@@ -245,6 +245,14 @@ Tests use Vitest + React Testing Library. Focus on user behavior, not implementa
 
 For hooks that schedule timers, use Vitest's fake-timer API instead of real delays.
 See [docs/testing-fake-timers.md](./docs/testing-fake-timers.md) for a worked example with `useDebouncedValue`, including timer cleanup.
+
+More focused guides:
+
+- [docs/testing-catalog-stale-banner.md](./docs/testing-catalog-stale-banner.md): testing localized, timestamped status messages in English and Spanish
+- [docs/testing-language-effects.md](./docs/testing-language-effects.md): testing `applyLanguageEffects` when `localStorage` throws
+- [docs/tooling-vitest-ui.md](./docs/tooling-vitest-ui.md): making `npm run test:ui` work from a clean install
+- [docs/tooling-bundle-analyzer.md](./docs/tooling-bundle-analyzer.md): opening `stats.html` on any operating system
+
 ### Test setup and automatic cleanup
 
 `src/test/setup.ts` runs before every test file (configured in `vite.config.ts` via `setupFiles`). It does two things automatically so individual tests do not have to.
