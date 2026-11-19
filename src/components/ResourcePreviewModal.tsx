@@ -33,11 +33,8 @@ function LazyImage({ src, alt, className = "" }: LazyImageProps) {
   // Use IntersectionObserver to defer the src assignment until the element
   // enters the viewport, avoiding any network fetch before it is visible.
   useEffect(() => {
-    // Reset per-source state so a failed or loaded image does not leak into
-    // the next preview source.
-    setLoaded(false);
-    setErrored(false);
-
+    // The caller keys this component by src, so a new source gets fresh
+    // state and a new image element without a synchronous effect update.
     if (!src || !imgRef.current) return;
 
     const img = imgRef.current;
