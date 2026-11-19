@@ -33,6 +33,11 @@ function LazyImage({ src, alt, className = "" }: LazyImageProps) {
   // Use IntersectionObserver to defer the src assignment until the element
   // enters the viewport, avoiding any network fetch before it is visible.
   useEffect(() => {
+    // Reset per-source state so a failed or loaded image does not leak into
+    // the next preview source.
+    setLoaded(false);
+    setErrored(false);
+
     if (!src || !imgRef.current) return;
 
     const img = imgRef.current;
@@ -235,6 +240,7 @@ export function ResourcePreviewModal({
               {/* Lazy-loaded thumbnail (#310) */}
               {data.thumbnailUrl && (
                 <LazyImage
+                  key={data.thumbnailUrl}
                   src={data.thumbnailUrl}
                   alt={`${data.title} thumbnail`}
                   className="h-32 w-full"

@@ -214,4 +214,64 @@ describe("ResourcePreviewModal", () => {
     });
     expect(screen.queryByRole("button", { name: /copy content hash/i })).not.toBeInTheDocument();
   });
+
+  it("recovers when a failed thumbnail source is replaced by a valid one", async () => {
+    vi.mocked(fetchResourceMeta).mockResolvedValue({
+      ...mockResourceMeta,
+      thumbnailUrl: "https://cdn.example.com/broken.png",
+    });
+
+    const { rerender } = render(
+      <ResourcePreviewModal resourceId="res-1" onClose={mockOnClose} onCopyUrl={mockOnCopyUrl} />,
+    );
+
+    const firstImg = await screen.findByRole("img", { name: /thumbnail/i });
+    fireEvent.error(firstImg);
+
+    await waitFor(() => {
+      expect(screen.getByRole("img", { name: /no preview available/i })).toBeInTheDocument();
+    });
+
+    vi.mocked(fetchResourceMeta).mockResolvedValue({
+      ...mockResourceMeta,
+      thumbnailUrl: "https://cdn.example.com/valid.png",
+    });
+    rerender(
+      <ResourcePreviewModal resourceId="res-2" onClose={mockOnClose} onCopyUrl={mockOnCopyUrl} />,
+    );
+
+    const secondImg = await screen.findByRole("img", { name: /thumbnail/i });
+    expect(secondImg).toHaveAttribute("src", "https://cdn.example.com/valid.png");
+    expect(screen.queryByRole("img", { name: /no preview available/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the skeleton again when a loaded thumbnail source is replaced by a loading one", async () => {
+    vi.mocked(fetchResourceMeta).mockResolvedValue({
+      ...mockResourceMeta,
+      thumbnailUrl: "https://cdn.example.com/first.png",
+    });
+
+    const { rerender } = render(
+      <ResourcePreviewModal resourceId="res-1" onClose={mockOnClose} onCopyUrl={mockOnCopyUrl} />,
+    );
+
+    const firstImg = await screen.findByRole("img", { name: /thumbnail/i });
+    fireEvent.load(firstImg);
+
+    await waitFor(() => {
+      expect(firstImg).toHaveClass("opacity-100");
+    });
+
+    vi.mocked(fetchResourceMeta).mockResolvedValue({
+      ...mockResourceMeta,
+      thumbnailUrl: "https://cdn.example.com/second.png",
+    });
+    rerender(
+      <ResourcePreviewModal resourceId="res-2" onClose={mockOnClose} onCopyUrl={mockOnCopyUrl} />,
+    );
+
+    const secondImg = await screen.findByRole("img", { name: /thumbnail/i });
+    expect(secondImg).toHaveAttribute("src", "https://cdn.example.com/second.png");
+    expect(secondImg).toHaveClass("opacity-0");
+  });
 });

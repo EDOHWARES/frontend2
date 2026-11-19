@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback } from "react";
+import React, { useEffect, useRef, useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import "../i18n/config.js";
 
@@ -20,6 +20,11 @@ interface ToastProps {
 export function Toast({ message, onDismiss, duration = 2500, fallbackUrl }: ToastProps) {
   const { t } = useTranslation();
   const inputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const remainingRef = useRef<number | null>(null);
+  const startedAtRef = useRef<number>(0);
+  const [paused, setPaused] = useState(false);
+  const pausedRef = useRef(false);
 
   // Auto-select the fallback URL text on mount so the user can Ctrl+C immediately
   useEffect(() => {
@@ -31,17 +36,48 @@ export function Toast({ message, onDismiss, duration = 2500, fallbackUrl }: Toas
   // Use a longer duration when showing a fallback URL so users have time to copy
   const effectiveDuration = fallbackUrl ? Math.max(duration, 8000) : duration;
 
+  // Reset the remaining time whenever the toast content changes
   useEffect(() => {
-    const timer = setTimeout(onDismiss, effectiveDuration);
-    return () => clearTimeout(timer);
-  }, [message, effectiveDuration, onDismiss]);
+    remainingRef.current = null;
+  }, [message, effectiveDuration]);
+
+  // Auto-dismiss timer; paused while focus is inside the toast
+  useEffect(() => {
+    if (paused) return;
+    const remaining = remainingRef.current ?? effectiveDuration;
+    startedAtRef.current = Date.now();
+    const timer = setTimeout(onDismiss, remaining);
+    return () => {
+      clearTimeout(timer);
+      remainingRef.current = Math.max(0, remaining - (Date.now() - startedAtRef.current));
+    };
+  }, [message, effectiveDuration, onDismiss, paused]);
+
+  const handleFocus = useCallback(() => {
+    if (pausedRef.current) return;
+    pausedRef.current = true;
+    setPaused(true);
+  }, []);
+
+  const handleBlur = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
+    const next = event.relatedTarget as Node | null;
+    if (next && containerRef.current?.contains(next)) return;
+    if (!pausedRef.current) return;
+    pausedRef.current = false;
+    setPaused(false);
+  }, []);
 
   const handleSelectAll = useCallback(() => {
     inputRef.current?.select();
   }, []);
 
   return (
-    <div className="fixed bottom-4 left-4 right-4 z-50 flex max-w-none flex-col gap-2 rounded-lg bg-gray-900 px-4 py-3 text-sm font-medium text-white shadow-lg sm:bottom-6 sm:left-auto sm:right-6 sm:max-w-sm dark:bg-gray-100 dark:text-gray-900">
+    <div
+      ref={containerRef}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+      className="fixed bottom-4 left-4 right-4 z-50 flex max-w-none flex-col gap-2 rounded-lg bg-gray-900 px-4 py-3 text-sm font-medium text-white shadow-lg sm:bottom-6 sm:left-auto sm:right-6 sm:max-w-sm dark:bg-gray-100 dark:text-gray-900"
+    >
       <span role="status" aria-live="polite">
         {message}
       </span>
