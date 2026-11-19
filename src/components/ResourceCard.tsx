@@ -133,10 +133,14 @@ export function ResourceCard({ resource: r, onPreview, onBuy }: Props) {
       </div>
 
       <div className="synapse-resource-card__footer">
-        <button className="synapse-btn synapse-btn--secondary synapse-btn--sm" onClick={() => onPreview(r)}>
+        <button
+          type="button"
+          className="synapse-btn synapse-btn--secondary synapse-btn--sm"
+          onClick={() => onPreview(r)}
+        >
           {t("catalog.preview")}
         </button>
-        <button className="synapse-btn synapse-btn--primary synapse-btn--sm" onClick={() => onBuy(r)}>
+        <button type="button" className="synapse-btn synapse-btn--primary synapse-btn--sm" onClick={() => onBuy(r)}>
           {t("catalog.buy")}
         </button>
       </div>
