@@ -1,4 +1,4 @@
-import React, { useCallback, useId, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import "../i18n/config.js";
 import type { CatalogFilters } from "../api/resources.js";
@@ -147,6 +147,14 @@ export function CatalogSearch({
 
   const activeDescendant =
     hasResults && activeIndex >= 0 ? `${listboxId}-item-${activeIndex}` : undefined;
+
+  // Keep the keyboard-selected suggestion visible. Only runs when the active
+  // index changes, so unrelated renders never scroll. `scrollIntoView` with
+  // nearest alignment does not move focus.
+  useEffect(() => {
+    if (!hasResults || activeIndex < 0) return;
+    itemRefs.current[activeIndex]?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [hasResults, activeIndex]);
 
   return (
     <div className="synapse-search">
