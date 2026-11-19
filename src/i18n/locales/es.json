@@ -199,7 +199,8 @@
     "view_on_explorer": "Ver en Stellar Explorer"
   },
   "toast": {
-    "resource_url_label": "URL del recurso"
+    "resource_url_label": "URL del recurso",
+    "dismiss": "Descartar notificación"
   },
   "time": {
     "just_now": "ahora mismo",
