@@ -165,7 +165,8 @@
     "view_on_explorer": "View on Stellar Explorer"
   },
   "toast": {
-    "resource_url_label": "Resource URL"
+    "resource_url_label": "Resource URL",
+    "dismiss": "Dismiss notification"
   },
   "time": {
     "just_now": "just now",

@@ -1,4 +1,4 @@
-import React, { useCallback, useId, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import "../i18n/config.js";
 import type { CatalogFilters } from "../api/resources.js";
@@ -66,7 +66,11 @@ export function CatalogSearch({
   const inputRef = searchInputRef ?? internalInputRef;
   const itemRefs = useRef<(HTMLLIElement | null)[]>([]);
 
-  const hasResults = results && results.length > 0;
+  // Whether the suggestions listbox is open. Escape closes it while keeping the
+  // query; the next search edit or explicit navigation reopens it.
+  const [isOpen, setIsOpen] = useState(true);
+
+  const hasResults = !!results && results.length > 0 && isOpen;
 
   // Reset the active index after the results list changes, never during render.
   const resultsKey = results?.map((result) => result.id).join("\u0000");
@@ -80,15 +84,19 @@ export function CatalogSearch({
 
   const handleInputKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (!hasResults) return;
-      const count = results!.length;
+      if (!results || results.length === 0) return;
+      const count = results.length;
 
       if (e.key === "ArrowDown") {
         e.preventDefault();
+        setIsOpen(true);
         setActiveIndex((prev) => (prev + 1 >= count ? 0 : prev + 1));
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
+        setIsOpen(true);
         setActiveIndex((prev) => (prev - 1 < 0 ? count - 1 : prev - 1));
+      } else if (!hasResults) {
+        return;
       } else if (e.key === "Enter") {
         e.preventDefault();
         if (activeIndex >= 0 && activeIndex < count) {
@@ -96,6 +104,8 @@ export function CatalogSearch({
           setActiveIndex(-1);
         }
       } else if (e.key === "Escape") {
+        e.preventDefault();
+        setIsOpen(false);
         setActiveIndex(-1);
       }
     },
@@ -126,6 +136,8 @@ export function CatalogSearch({
         setActiveIndex(-1);
         inputRef.current?.focus();
       } else if (e.key === "Escape") {
+        e.preventDefault();
+        setIsOpen(false);
         setActiveIndex(-1);
         inputRef.current?.focus();
       }
@@ -135,6 +147,14 @@ export function CatalogSearch({
 
   const activeDescendant =
     hasResults && activeIndex >= 0 ? `${listboxId}-item-${activeIndex}` : undefined;
+
+  // Keep the keyboard-selected suggestion visible. Only runs when the active
+  // index changes, so unrelated renders never scroll. `scrollIntoView` with
+  // nearest alignment does not move focus.
+  useEffect(() => {
+    if (!hasResults || activeIndex < 0) return;
+    itemRefs.current[activeIndex]?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [hasResults, activeIndex]);
 
   return (
     <div className="synapse-search">
@@ -164,7 +184,10 @@ export function CatalogSearch({
           aria-autocomplete={hasResults ? "list" : undefined}
           placeholder={t("catalog.search_placeholder")}
           value={filters.search ?? ""}
-          onChange={(e) => onChange({ ...filters, search: e.target.value })}
+          onChange={(e) => {
+            setIsOpen(true);
+            onChange({ ...filters, search: e.target.value });
+          }}
           onKeyDown={handleInputKeyDown}
           className="synapse-input synapse-search__input"
         />
@@ -191,7 +214,10 @@ export function CatalogSearch({
                     setActiveIndex(-1);
                     inputRef.current?.focus();
                   }}
-                  onMouseEnter={() => setActiveIndex(index)}
+                  onMouseEnter={() => {
+                    setIsOpen(true);
+                    setActiveIndex(index);
+                  }}
                   className="synapse-listbox__option"
                 >
                   <span className="block font-medium">{result.title}</span>

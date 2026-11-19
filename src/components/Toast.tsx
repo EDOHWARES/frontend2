@@ -92,6 +92,14 @@ export function Toast({ message, onDismiss, duration = 2500, fallbackUrl }: Toas
           className="w-full rounded border border-gray-600 bg-gray-800 px-2 py-1 text-xs text-gray-200 outline-none focus:border-accent focus:ring-1 focus:ring-accent dark:border-gray-300 dark:bg-gray-200 dark:text-gray-800"
         />
       )}
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label={t("toast.dismiss")}
+        className="self-end rounded px-2 py-1 text-xs font-semibold text-gray-300 underline outline-none hover:text-white focus-visible:ring-2 focus-visible:ring-accent dark:text-gray-700 dark:hover:text-gray-900"
+      >
+        {t("toast.dismiss")}
+      </button>
     </div>
   );
 }
