@@ -1,13 +1,25 @@
 // Apply the saved theme before first paint to avoid a flash.
 (function () {
+  var stored = null;
   try {
-    var stored = localStorage.getItem("synapsvault-theme");
-    var dark =
-      stored === "light" || stored === "dark"
-        ? stored === "dark"
-        : window.matchMedia("(prefers-color-scheme: dark)").matches;
-    if (dark) document.documentElement.classList.add("dark");
+    stored = localStorage.getItem("synapsvault-theme");
   } catch (e) {}
+
+  var dark;
+  if (stored === "light" || stored === "dark") {
+    dark = stored === "dark";
+  } else {
+    try {
+      dark = !!(
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-color-scheme: dark)").matches
+      );
+    } catch (e) {
+      dark = false;
+    }
+  }
+
+  if (dark) document.documentElement.classList.add("dark");
 })();
 
 // Apply the saved language before first paint to avoid a flash.
