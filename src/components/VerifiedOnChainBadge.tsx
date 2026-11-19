@@ -1,7 +1,9 @@
 import React from "react";
 
+type OnchainStatus = "none" | "pending" | "registered" | "failed";
+
 interface Props {
-  onchainStatus: "none" | "pending" | "registered" | "failed";
+  onchainStatus: OnchainStatus;
   className?: string;
 }
 
@@ -28,8 +30,20 @@ const STATUS_CONFIG = {
   },
 } as const;
 
+const UNKNOWN_CONFIG = {
+  label: "On-chain status unknown",
+  className: "bg-surface-hover text-fg-muted border-line",
+  icon: "?",
+} as const;
+
+function resolveConfig(onchainStatus: string) {
+  return Object.prototype.hasOwnProperty.call(STATUS_CONFIG, onchainStatus)
+    ? STATUS_CONFIG[onchainStatus as OnchainStatus]
+    : UNKNOWN_CONFIG;
+}
+
 export function VerifiedOnChainBadge({ onchainStatus, className = "" }: Props) {
-  const config = STATUS_CONFIG[onchainStatus];
+  const config = resolveConfig(onchainStatus);
 
   return (
     <span
