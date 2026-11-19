@@ -50,7 +50,9 @@ export function VerifiedOnChainBadge({ onchainStatus, className = "" }: Props) {
       className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-medium ${config.className} ${className}`}
       title={config.label}
     >
-      <span className="text-sm">{config.icon}</span>
+      <span className="text-sm" aria-hidden="true">
+        {config.icon}
+      </span>
       {config.label}
     </span>
   );
