@@ -38,6 +38,11 @@ For local development, keep `VITE_API_URL` **empty** and point
 API requests to that target, which avoids CORS issues and keeps the browser
 talking to a single origin. See `.env.example` for the full list of variables.
 
+`.env.example` lists only variables the application actually reads. There are
+no debug or verbose-logging flags (`VITE_DEBUG` / `VITE_VERBOSE_LOGGING` were
+removed because nothing in `src/` consumed them). When you add a new `VITE_*`
+variable, add its example entry in the same PR as the code that reads it.
+
 ```bash
 # .env (local development)
 VITE_API_URL=
@@ -208,7 +213,9 @@ every feature-branch commit.
    [Previewing a Production Build](#previewing-a-production-build).
    For details on reviewing auto-fix changes, see [Linting](#linting).
    To understand what the secret scanner checks and how to interpret its
-   output, see [Secret Scanner](#secret-scanner).
+   output, see [Secret Scanner](#secret-scanner). `npm run check` also
+   verifies English/Spanish key parity — see
+   [Translation Key Parity](#translation-key-parity).
 
    CI also enforces a production dependency audit that `npm run check` does not
    include — see [Production Dependency Audit](#production-dependency-audit) to
@@ -242,6 +249,14 @@ Vitest packages are bumped by Dependabot in separate PRs — see
 ### Vitest UI Peer Dependency
 For hooks that schedule timers, use Vitest's fake-timer API instead of real delays.
 See [docs/testing-fake-timers.md](./docs/testing-fake-timers.md) for a worked example with `useDebouncedValue`, including timer cleanup.
+
+More focused guides:
+
+- [docs/testing-catalog-stale-banner.md](./docs/testing-catalog-stale-banner.md): testing localized, timestamped status messages in English and Spanish
+- [docs/testing-language-effects.md](./docs/testing-language-effects.md): testing `applyLanguageEffects` when `localStorage` throws
+- [docs/tooling-vitest-ui.md](./docs/tooling-vitest-ui.md): making `npm run test:ui` work from a clean install
+- [docs/tooling-bundle-analyzer.md](./docs/tooling-bundle-analyzer.md): opening `stats.html` on any operating system
+
 ### Test setup and automatic cleanup
 
 `src/test/setup.ts` runs before every test file (configured in `vite.config.ts` via `setupFiles`). It does two things automatically so individual tests do not have to.

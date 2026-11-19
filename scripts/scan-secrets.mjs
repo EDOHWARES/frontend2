@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -22,6 +23,10 @@ async function scan(directory) {
       }
     }
   }
+}
+if (!existsSync("dist")) {
+  console.error("dist/ not found — run `npm run build` before scanning for secrets.");
+  process.exit(1);
 }
 await scan("dist");
 if (failures) process.exitCode = 1;
