@@ -45,6 +45,7 @@ export function ErrorBanner({ message, hint, onRetry }: Props) {
 
       {onRetry && (
         <button
+          type="button"
           onClick={onRetry}
           className="synapse-btn synapse-btn--danger synapse-btn--sm mt-1"
         >
